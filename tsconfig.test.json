@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    // Автономный конфиг, БЕЗ extends: база Expo задаёт customConditions и
+    // moduleResolution bundler, несовместимые с CommonJS-выводом.
+    //
+    // CommonJS намеренно: исходники импортируют друг друга без расширений
+    // (./errors, а не ./errors.ts), а ESM в Node такого не резолвит. В CJS
+    // резолвинг без расширений штатный, поэтому исходники трогать не нужно.
+    "module": "commonjs",
+    "moduleResolution": "node10",
+    "ignoreDeprecations": "6.0",
+    "target": "es2022",
+    "lib": ["es2022", "dom"],
+    "types": ["node"],
+    "strict": true,
+    "esModuleInterop": true,
+    // Словари i18n лежат в .json: chatStore берёт класс обучения из настроек,
+    // а те подключают i18n. Без этого флага компиляция набора падает на
+    // импорте tg.json, хотя сами тесты локализацию не трогают.
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": false,
+    "rootDir": "./src",
+    "outDir": ".test-build"
+  },
+  // Только то, что нужно тестам. Экраны и store сюда не попадают: они тянут
+  // react-native, которому в node-окружении делать нечего.
+  "include": [
+    "src/api/**/*.ts",
+    "src/features/**/*.ts",
+    "src/store/settingsCodec.ts",
+    "src/telemetry/**/*.ts",
+    "src/store/settingsTypes.ts",
+    "src/store/__tests__/**/*.ts",
+    "src/test/**/*.ts"
+  ],
+  "exclude": ["node_modules", ".expo", ".test-build"]
+}

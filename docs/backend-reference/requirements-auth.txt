@@ -1,0 +1,21 @@
+# Зависимости, которые добавляют задачи B1–B6 поверх существующего sorollm-webapp.
+#
+# FastAPI, SQLAlchemy и драйвер PostgreSQL здесь НЕ перечислены намеренно — они
+# уже есть в проекте-хозяине, и повторное закрепление их версий может
+# конфликтовать с тем, что там стоит. Ставится поверх:
+#
+#   pip install -r docs/backend-reference/requirements-auth.txt
+
+# Хеширование паролей. Версии закреплены жёстко: passlib 1.7.4 несовместим с
+# bcrypt >= 4.1 — падает при первом хешировании (AttributeError про __about__),
+# а на bcrypt 5.x ещё и ValueError про 72 байта. Проверено прогоном против
+# PostgreSQL. Верхняя граница bcrypt обязательна.
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+
+# Подпись и проверка access-токенов (JWT).
+PyJWT>=2.8,<3
+
+# Валидация EmailStr в pydantic-схемах (register/login/verify/forgot/reset).
+# Без него pydantic бросает ImportError при первом же обращении к EmailStr.
+email-validator>=2.0
