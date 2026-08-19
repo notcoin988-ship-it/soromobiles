@@ -15,31 +15,24 @@ import { useLinks } from '../store/config';
 import ChatScreen from '../screens/ChatScreen';
 import DevGlyphsScreen from '../screens/DevGlyphsScreen';
 import SettingsScreen from '../screens/SettingsScreen';
+import AskNameScreen from '../screens/onboarding/AskNameScreen';
 import ChooseLanguageScreen from '../screens/onboarding/ChooseLanguageScreen';
 import DisclaimerScreen from '../screens/onboarding/DisclaimerScreen';
-import ForgotPasswordScreen from '../screens/auth/ForgotPasswordScreen';
-import ResetPasswordScreen from '../screens/auth/ResetPasswordScreen';
 import SignInScreen from '../screens/auth/SignInScreen';
-import SignUpScreen from '../screens/auth/SignUpScreen';
-import VerifyEmailScreen from '../screens/auth/VerifyEmailScreen';
 import { useOnboardingStore } from '../store/onboarding';
 import { useTheme, useThemeName } from '../store/settings';
 
 /**
  * Корневая навигация (§5.1, §8).
  *
- * Экраны переключаются не императивно, а по статусу авторизации: после
- * подтверждения почты человек попадает сразу в чат, а не обратно на вход
- * (§8.2). Это работает само собой, потому что дерево навигации зависит от
- * status в сторе.
+ * Экраны переключаются не императивно, а по статусу авторизации: как только
+ * обмен кода на сессию завершён, человек оказывается в чате — возвращать его
+ * на экран входа нечему и незачем (§8.2). Это работает само собой, потому что
+ * дерево навигации зависит от status в сторе.
  */
 
 export type AuthStackParams = {
   SignIn: undefined;
-  SignUp: undefined;
-  VerifyEmail: undefined;
-  ForgotPassword: undefined;
-  ResetPassword: undefined;
 };
 
 export type AppStackParams = {
@@ -68,47 +61,17 @@ const linking: LinkingOptions<AuthStackParams & AppStackParams> = {
 };
 
 function AuthFlow() {
-  const status = useAuthStore((s) => s.status);
-
+  /**
+   * Экран ровно один: вход через Google (§8.2). Стек вокруг него оставлен
+   * намеренно — на нём держится схема soro://signin из linking и общий
+   * заголовок-навигация с остальным приложением. Убрать его значит завести
+   * особый случай ради одного экрана.
+   */
   return (
     <AuthStack.Navigator screenOptions={{ headerShown: false }}>
-      {status === 'pendingVerification' ? (
-        <AuthStack.Screen name="VerifyEmail">
-          {() => <VerifyEmailScreenHost />}
-        </AuthStack.Screen>
-      ) : (
-        <>
-          <AuthStack.Screen name="SignIn">
-            {({ navigation }) => (
-              <SignInScreen
-                onSignUp={() => navigation.navigate('SignUp')}
-                onForgotPassword={() => navigation.navigate('ForgotPassword')}
-              />
-            )}
-          </AuthStack.Screen>
-          <AuthStack.Screen name="SignUp">
-            {({ navigation }) => <SignUpScreen onSignIn={() => navigation.goBack()} />}
-          </AuthStack.Screen>
-          <AuthStack.Screen name="ForgotPassword">
-            {({ navigation }) => (
-              <ForgotPasswordScreen
-                onSent={() => navigation.navigate('ResetPassword')}
-                onBack={() => navigation.popTo('SignIn')}
-              />
-            )}
-          </AuthStack.Screen>
-          <AuthStack.Screen name="ResetPassword">
-            {({ navigation }) => <ResetPasswordScreen onBack={() => navigation.popTo('SignIn')} />}
-          </AuthStack.Screen>
-        </>
-      )}
+      <AuthStack.Screen name="SignIn" component={SignInScreen} />
     </AuthStack.Navigator>
   );
-}
-
-function VerifyEmailScreenHost() {
-  const signOut = useAuthStore((s) => s.signOut);
-  return <VerifyEmailScreen onBack={() => void signOut()} />;
 }
 
 /**
@@ -177,8 +140,10 @@ export default function RootNavigator() {
   const themeName = useThemeName();
 
   const languageChosen = useOnboardingStore((s) => s.languageChosen);
+  const name = useOnboardingStore((s) => s.name);
   const acceptedDocsVersion = useOnboardingStore((s) => s.acceptedDocsVersion);
   const markLanguageChosen = useOnboardingStore((s) => s.markLanguageChosen);
+  const setName = useOnboardingStore((s) => s.setName);
   const acceptDocs = useOnboardingStore((s) => s.acceptDocs);
 
   // Долгая сессия (§6.2): при старте пробуем восстановить вход по
@@ -236,6 +201,13 @@ export default function RootNavigator() {
    */
   if (!languageChosen) {
     return <ChooseLanguageScreen onContinue={markLanguageChosen} />;
+  }
+
+  // Имя спрашивается один раз и хранится на устройстве: у входа через Google
+  // своей формы регистрации нет, а приветствие в чате должно звать человека
+  // так, как он сам себя называет.
+  if (!name) {
+    return <AskNameScreen onContinue={setName} />;
   }
 
   if (needsConsent(acceptedDocsVersion)) {

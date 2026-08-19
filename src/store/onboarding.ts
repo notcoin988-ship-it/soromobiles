@@ -23,18 +23,29 @@ import { ONBOARDING_KEY, settingsStorage } from './kv';
 
 export type OnboardingState = {
   languageChosen: boolean;
+  /**
+   * Имя, которым человек попросил себя называть. Спрашивается один раз на
+   * втором экране первого запуска и живёт ТОЛЬКО на устройстве: у сервера
+   * своё имя из Google, и переучивать его мы не можем — ручки правки профиля
+   * в API нет. Приветствие в чате берёт это имя, потому что оно ближе к тому,
+   * как человек сам себя называет, чем строка из аккаунта Google.
+   */
+  name: string | null;
   acceptedDocsVersion: string | null;
 };
 
 export type OnboardingActions = {
   /** Язык выбран на первом экране — больше не спрашиваем. */
   markLanguageChosen: () => void;
+  /** Имя с экрана «Шумо чӣ ном доред?». Пустое не сохраняется. */
+  setName: (name: string) => void;
   /** Согласие с текущей редакцией документов. */
   acceptDocs: () => void;
 };
 
 const DEFAULT_STATE: OnboardingState = {
   languageChosen: false,
+  name: null,
   acceptedDocsVersion: null,
 };
 
@@ -54,6 +65,9 @@ function load(): OnboardingState {
     const record = parsed as Partial<OnboardingState>;
     return {
       languageChosen: record.languageChosen === true,
+      // Пустая строка равносильна отсутствию: иначе экран имени считался бы
+      // пройденным, а приветствие здоровалось бы с пустотой.
+      name: typeof record.name === 'string' && record.name.trim() ? record.name : null,
       acceptedDocsVersion:
         typeof record.acceptedDocsVersion === 'string' ? record.acceptedDocsVersion : null,
     };
@@ -79,6 +93,13 @@ export const useOnboardingStore = create<OnboardingState & OnboardingActions>()(
 
     markLanguageChosen: () => {
       set({ languageChosen: true });
+      persist();
+    },
+
+    setName: (name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      set({ name: trimmed });
       persist();
     },
 

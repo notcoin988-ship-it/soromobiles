@@ -9,7 +9,7 @@ import { destroyDatabase } from '../db/engine';
 import { dropDatabaseKey } from '../db/encryptionKey';
 import { useLinks } from '../store/config';
 import { APP_VERSION, BUILD_NUMBER } from '../telemetry/appVersion';
-import { Button, ErrorBanner, Field } from '../design/components';
+import { Button, ErrorBanner } from '../design/components';
 import {
   MAX_FONT_SIZE_MULTIPLIER,
   radius,
@@ -56,14 +56,13 @@ export default function SettingsScreen({ onClose }: { onClose: () => void }) {
 
   const [policyVisible, setPolicyVisible] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [password, setPassword] = useState('');
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const confirmDeleteAccount = async () => {
     setBusy(true);
     setDeleteError(null);
-    const result = await deleteAccount(api, password);
+    const result = await deleteAccount(api);
     setBusy(false);
 
     if (result.ok) {
@@ -81,9 +80,12 @@ export default function SettingsScreen({ onClose }: { onClose: () => void }) {
       await signOut();
       return;
     }
-    setDeleteError(
-      result.error.kind === 'unauthorized' ? 'authErrors.badCredentials' : 'errors.genericError',
-    );
+    /**
+     * Подтверждать удаление паролем больше нечем: у аккаунта Google его нет.
+     * Истёкшую сессию отдельным текстом не разбираем — 401 клиент уже
+     * обработал сам, попыткой рефреша и логаутом при её провале (§5.3).
+     */
+    setDeleteError('errors.genericError');
   };
 
   return (
@@ -209,14 +211,18 @@ export default function SettingsScreen({ onClose }: { onClose: () => void }) {
 
         {deleting ? (
           <>
-            <Field
-              label={t('settings.deleteAccountConfirm')}
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-              autoCapitalize="none"
-              testID="delete-password"
-            />
+            {/*
+              Второй экран подтверждения вместо поля пароля: у входа через
+              Google пароля нет, а необратимое действие не должно случаться от
+              одного случайного тапа по чужому разблокированному телефону.
+            */}
+            <Text
+              style={[scaleText(typography.caption, scale), { color: theme.text }]}
+              maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
+              testID="delete-confirm-question"
+            >
+              {t('settings.confirmDeleteAccount')}
+            </Text>
             {deleteError ? <ErrorBanner message={t(deleteError)} /> : null}
             <Button
               label={t('auth.deleteAccount')}

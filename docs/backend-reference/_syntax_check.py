@@ -7,11 +7,10 @@ import sys
 FILES = [
     "security.py",
     "models_refresh_token.py",
-    "models_verification_code.py",
+    "models_mobile_auth_code.py",
     "router_auth.py",
-    "router_auth_register.py",
+    "router_auth_google.py",
     "deps.py",
-    "email_sender.py",
     "router_account.py",
     "router_config.py",
     "models_message_idempotency.py",

@@ -1,0 +1,64 @@
+# E2E-сценарий §14: первый запуск → вход через Google → чат.
+#
+# Maestro, а не Detox: Detox требует отдельной инструментированной сборки и
+# своего раннера, Maestro работает с обычным APK и читает экран так же, как
+# программа чтения с экрана. Для сценариев из §14 это дешевле на порядок.
+#
+# ПЕРЕД ЗАПУСКОМ:
+#   1. EXPO_PUBLIC_API_URL указывает на развёрнутый бэкенд
+#   2. npx expo start --dev-client
+#   3. maestro test .maestro/01-google-signin.yaml
+#
+# ГДЕ СЦЕНАРИЙ ОСТАНАВЛИВАЕТСЯ И ПОЧЕМУ. Сам вход идёт в окне Chrome Custom
+# Tabs на страницах accounts.google.com. Это чужое приложение с чужой
+# вёрсткой, к тому же Google показывает разным устройствам разные экраны и
+# умеет требовать подтверждение с телефона. Автоматизировать его через
+# Maestro нельзя — да и не нужно: проверять надо своё, а не форму Google.
+# Поэтому сценарий доводит до окна браузера, а дальше вход выполняется руками,
+# после чего проверяется, что приложение вернуло себе управление и открыло чат.
+appId: ai.zypl.soro
+---
+- launchApp:
+    clearState: true
+
+# Онбординг (§8.1): язык → имя → дисклеймер с обязательным согласием
+- assertVisible: 'Забонро интихоб кунед'
+- tapOn: 'Идома'
+
+# Второй экран первого запуска: имя для приветствия
+- assertVisible: 'Шумо чӣ ном доред?'
+- tapOn:
+    id: 'onboarding-name'
+- inputText: 'Maestro'
+- tapOn: 'Идома'
+
+- assertVisible: 'Soro метавонад хато кунад'
+- tapOn:
+    id: 'onboarding-consent'
+- tapOn: 'Идома'
+
+# Экран входа: одна кнопка, полей почты и пароля нет
+- assertVisible: 'Хуш омадед ба Soro'
+- assertVisible: 'Идома бо Google'
+- assertNotVisible: 'Почтаи электронӣ'
+- assertNotVisible: 'Парол'
+
+# Документы раскрыты до создания аккаунта (App Store 5.1.1, Google User Data)
+- tapOn:
+    id: 'consent-link-privacy'
+- assertVisible:
+    id: 'legal-modal'
+- tapOn:
+    id: 'legal-modal-close'
+
+- tapOn:
+    id: 'signin-google'
+
+# ДАЛЬШЕ РУКАМИ: в открывшемся окне выбрать аккаунт Google и подтвердить
+# доступ. Окно закроется само — его закрывает ASWebAuthenticationSession /
+# Custom Tabs, поймав редирект на soro://auth/callback.
+#
+# 120 секунд: ручной вход с вводом пароля в чужом окне столько и занимает.
+- extendedWaitUntil:
+    visible: 'Имрӯз чӣ гуна метавонам кӯмак кунам?'
+    timeout: 120000

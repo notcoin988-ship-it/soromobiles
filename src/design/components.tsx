@@ -8,6 +8,7 @@ import {
   type TextInputProps,
 } from 'react-native';
 
+import { GoogleMark } from './GoogleMark';
 import { Icon } from './Icon';
 import { Logo } from './Logo';
 import { useFontScale, useTheme } from '../store/settings';
@@ -240,6 +241,69 @@ export function Checkbox({
   );
 }
 
+/**
+ * Кнопка входа через Google.
+ *
+ * Не вариант обычной Button, а отдельный компонент: рубиновая заливка ей не
+ * положена. Google Sign-In Branding Guidelines разрешают ровно две кнопки —
+ * светлую и тёмную нейтральную, — со знаком слева, текстом «Sign in with
+ * Google» (переводится) и неизменёнными пропорциями знака. Рубиновая кнопка с
+ * тем же знаком — прямое нарушение, и на ревью в Play её замечают.
+ *
+ * Поэтому фон и рамка берутся из нейтральных токенов темы: в светлой это
+ * белая поверхность с серой рамкой, в тёмной — тёмная. Знак остаётся
+ * четырёхцветным в обеих (см. GoogleMark).
+ */
+export function GoogleButton({
+  label,
+  onPress,
+  loading,
+  testID,
+}: {
+  label: string;
+  onPress: () => void;
+  loading?: boolean;
+  testID?: string;
+}) {
+  const theme = useTheme();
+  const scale = useFontScale();
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled: Boolean(loading) }}
+      testID={testID}
+      onPress={onPress}
+      disabled={loading}
+      style={({ pressed }) => [
+        styles.button,
+        styles.googleButton,
+        {
+          backgroundColor: theme.bg1,
+          borderColor: theme.border,
+          opacity: pressed && !loading ? 0.9 : 1,
+        },
+      ]}
+    >
+      {loading ? (
+        <Logo animated width={size.buttonSpinner} />
+      ) : (
+        <>
+          <GoogleMark size={size.googleMark} />
+          <Text
+            style={[scaleText(typography.newChatButton, scale), { color: theme.text }]}
+            maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
+          >
+            {label}
+          </Text>
+        </>
+      )}
+    </Pressable>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
 /** Плашка ошибки уровня формы — когда ошибка не привязана к полю. */
 export function ErrorBanner({ message }: { message: string }) {
   const scale = useFontScale();
@@ -263,6 +327,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 14,
+  },
+  googleButton: {
+    flexDirection: 'row',
+    gap: 12,
+    borderWidth: 1,
   },
   field: { gap: 6 },
   inputRow: { justifyContent: 'center' },

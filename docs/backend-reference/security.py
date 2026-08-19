@@ -1,14 +1,14 @@
 """
-Хеширование паролей и работа с токенами (задача B1).
+Токены сессии (задача B1).
 
 Зависимости:
-    pip install "passlib[bcrypt]" pyjwt
+    pip install pyjwt
+
+Паролей здесь нет и не будет: вход в приложении только через Google
+(router_auth_google.py), хешировать нечего. Собственный вход сайта по паролю
+живёт в веб-проекте и этот файл не использует.
 
 Почему именно так:
-
-* Пароль НИКОГДА не хранится в открытом виде и не хешируется через sha256.
-  bcrypt намеренно медленный — это его смысл: перебор украденной базы
-  становится дорогим. sha256 перебирается миллиардами хешей в секунду.
 
 * access_token — JWT: сервер может проверить его подписью, не ходя в базу.
   Живёт 30 минут, поэтому украденный токен быстро протухает.
@@ -30,7 +30,6 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 import jwt
-from passlib.context import CryptContext
 
 # --- Настройки ---------------------------------------------------------------
 
@@ -57,22 +56,6 @@ JWT_ALGORITHM = "HS256"
 
 ACCESS_TOKEN_TTL = timedelta(minutes=30)   # §6.2
 REFRESH_TOKEN_TTL = timedelta(days=90)     # §6.2
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-
-# --- Пароли ------------------------------------------------------------------
-
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
-
-
-def verify_password(plain: str, hashed: str) -> bool:
-    """
-    passlib сам сравнивает за постоянное время — обычное `==` для хешей
-    подвержено timing-атаке.
-    """
-    return pwd_context.verify(plain, hashed)
 
 
 # --- Access token (JWT) ------------------------------------------------------

@@ -47,16 +47,21 @@ export type AuthSession = {
   refresh_token: string;
   expires_in: number;
   user: User;
+  /**
+   * Аккаунт заведён этим же входом. Нужен только счётчику signup_completed
+   * (§13): на клиенте регистрация через Google неотличима от возврата.
+   */
+  is_new_user?: boolean;
 };
 
-/** Коды ошибок форм авторизации (§6.6). */
-export type AuthErrorCode =
-  | 'email_taken'
-  | 'bad_credentials'
-  | 'email_not_verified'
-  | 'invalid_code'
-  | 'expired_code'
-  | 'weak_password';
+/**
+ * Коды ошибок авторизации (§6.6 после перехода на Google).
+ *
+ * От почты с паролем не осталось ничего: ни занятой почты, ни неверного
+ * пароля, ни кодов из письма. Обмен одноразового кода на сессию падает ровно
+ * по двум причинам — код просрочен либо уже потрачен.
+ */
+export type AuthErrorCode = 'invalid_code' | 'expired_code';
 
 // ---------------------------------------------------------------------------
 // Чаты

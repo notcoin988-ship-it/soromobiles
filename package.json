@@ -6,6 +6,7 @@
     "@expo-google-fonts/inter": "^0.4.2",
     "@op-engineering/op-sqlite": "^17.1.5",
     "@react-native-community/netinfo": "12.0.1",
+    "@react-native-google-signin/google-signin": "^16.1.4",
     "@react-native-masked-view/masked-view": "0.3.2",
     "@react-navigation/drawer": "^7.13.8",
     "@react-navigation/native": "^7.3.16",

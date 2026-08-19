@@ -15,15 +15,23 @@
  * Код возврата 0 — контракт выполнен полностью, приложение может работать
  * против этого адреса. Ненулевой — нет.
  *
- * Скрипт ничего не ломает: создаёт один тестовый аккаунт со случайной почтой
- * и один чат.
+ * Скрипт ничего не ломает: аккаунтов он больше не создаёт (регистрация по
+ * почте убрана, вход только через Google), а чат создаёт один — и только
+ * если ему передали токен:
+ *
+ *   SORO_ACCESS_TOKEN=<access> node scripts/check-contract.mjs https://api.sorollm.tj
  */
 
 const BASE = (process.argv[2] ?? 'http://localhost:8787').replace(/\/+$/, '');
 const TIMEOUT_MS = 30_000;
 
 const results = [];
-let tokens = { access: null, refresh: null };
+/**
+ * Живого входа у скрипта нет: он проходит через Google руками. Поэтому токен
+ * для проверок чатов берётся из окружения — его можно снять с устройства,
+ * войдя в приложение против того же адреса.
+ */
+let tokens = { access: process.env.SORO_ACCESS_TOKEN ?? null, refresh: null };
 let chatId = null;
 
 function record(task, name, ok, detail) {
@@ -32,7 +40,7 @@ function record(task, name, ok, detail) {
   console.log(`  ${mark} [${task}] ${name}${detail ? ` — ${detail}` : ''}`);
 }
 
-async function call(path, { method = 'GET', body, auth = false, raw = false } = {}) {
+async function call(path, { method = 'GET', body, auth = false, raw = false, redirect = 'follow' } = {}) {
   const headers = { Accept: 'application/json' };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (auth && tokens.access) headers.Authorization = `Bearer ${tokens.access}`;
@@ -46,6 +54,9 @@ async function call(path, { method = 'GET', body, auth = false, raw = false } = 
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
+      // redirect: 'manual' нужен проверке /auth/google: интересен сам редирект
+      // на accounts.google.com, а не страница, которая по нему откроется.
+      redirect,
     });
     if (raw) return { status: response.status, response };
     const text = await response.text();
@@ -80,75 +91,103 @@ async function checkConfig() {
 }
 
 async function checkAuth() {
-  console.log('\nB2 + B3 + B1 — регистрация, подтверждение, вход, токены');
-
-  const email = `contract-${Date.now()}@example.tj`;
-  const password = 'parolContract123';
-
-  const reg = await call('/v1/auth/register', {
-    method: 'POST',
-    body: { email, password, fullname: 'Contract Test', lang: 'tg' },
-  });
-
-  if (reg.status === 404) {
-    record('B2', 'POST /v1/auth/register', false, 'эндпоинта не существует (404)');
-    record('B2', 'подтверждение почты кодом', false, 'недостижимо: нет регистрации');
-    record('B3', 'вход по email + паролю', false, 'недостижимо: нет регистрации');
-    record('B1', 'выдача access + refresh токенов', false, 'недостижимо: нет входа');
-    return;
-  }
-
-  record('B2', 'POST /v1/auth/register', reg.status === 202, reg.status !== 202 ? `отвечает ${reg.status}, ожидался 202` : '');
+  console.log('\nB1 + B2 — вход через Google и выдача токенов');
 
   /**
-   * Уникальность по email — суть задачи B2 (сейчас бэкенд проверяет по login).
-   *
-   * Допускаются два ответа, и это не послабление:
-   *   409 email_taken — почта принадлежит подтверждённому аккаунту;
-   *   202             — аккаунт ещё не подтверждён, код отправляется повторно.
-   * Второе корректнее для пользователя: аккаунта фактически нет, и говорить
-   * «почта занята» означало бы запереть человека, не дошедшего до письма.
-   * §6.6 этот случай не описывает, поэтому тест принимает оба.
+   * Пройти вход целиком скрипт не может: на середине стоит живой Google с
+   * выбором аккаунта. Проверяется всё, что можно проверить без человека, —
+   * то есть обе НАШИ половины обмена.
    */
-  const dup = await call('/v1/auth/register', {
-    method: 'POST',
-    body: { email, password, fullname: 'Duplicate', lang: 'tg' },
-  });
-  record(
-    'B2',
-    'повтор регистрации обработан (409 либо 202 для неподтверждённой)',
-    [409, 202].includes(dup.status),
-    ![409, 202].includes(dup.status) ? `отвечает ${dup.status}` : '',
-  );
+  const start = await call('/auth/google?platform=mobile', { redirect: 'manual', raw: true });
 
-  // Код приходит письмом — автоматически его не получить.
-  console.log('     ↳ код подтверждения приходит письмом; дальше проверяется только форма ответов');
-
-  const verify = await call('/v1/auth/verify', { method: 'POST', body: { email, code: '000000' } });
-  record(
-    'B2',
-    'POST /v1/auth/verify отвергает неверный код',
-    verify.status === 400,
-    verify.status === 404 ? 'эндпоинта нет' : verify.status !== 400 ? `отвечает ${verify.status}` : '',
-  );
-
-  const login = await call('/v1/auth/login', { method: 'POST', body: { email, password } });
-  if (login.status === 404) {
-    record('B3', 'POST /v1/auth/login', false, 'эндпоинта не существует (404)');
+  if (start.status === 404) {
+    record('B2', 'GET /auth/google', false, 'эндпоинта не существует (404)');
   } else {
-    // Незаверифицированный аккаунт обязан получить 403 email_not_verified.
-    record('B3', 'POST /v1/auth/login отвечает по контракту', [200, 401, 403].includes(login.status), `статус ${login.status}`);
-    if (login.status === 200) {
-      tokens = { access: login.json?.access_token ?? null, refresh: login.json?.refresh_token ?? null };
-      record('B1', 'вход выдаёт access + refresh', Boolean(tokens.access && tokens.refresh));
-    }
+    const location = start.response?.headers.get('location') ?? '';
+    record(
+      'B2',
+      'GET /auth/google?platform=mobile ведёт на Google',
+      [302, 303, 307].includes(start.status) && location.includes('accounts.google.com'),
+      [302, 303, 307].includes(start.status)
+        ? location
+          ? `редирект на ${new URL(location).host}`
+          : 'редирект без Location'
+        : `статус ${start.status}, ожидался 302`,
+    );
   }
 
-  const forgot = await call('/v1/auth/password/forgot', { method: 'POST', body: { email } });
-  record('B4', 'POST /v1/auth/password/forgot всегда 202', forgot.status === 202, forgot.status === 404 ? 'эндпоинта нет' : `статус ${forgot.status}`);
+  /**
+   * Нативный путь: id_token из системного окна выбора аккаунта. Настоящего
+   * токена у скрипта нет, поэтому проверяется поведение на заведомо негодном:
+   * сервер обязан ОТВЕРГНУТЬ его, а не упасть и не завести сессию.
+   */
+  const idToken = await call('/v1/auth/google', {
+    method: 'POST',
+    body: { id_token: 'contract-test-not-a-real-token' },
+  });
 
-  const refresh = await call('/v1/auth/refresh', { method: 'POST', body: { refresh_token: tokens.refresh ?? 'nonexistent' } });
+  if (idToken.status === 404) {
+    record('B2', 'POST /v1/auth/google (нативный вход)', false, 'эндпоинта не существует (404)');
+  } else {
+    record(
+      'B2',
+      'POST /v1/auth/google отвергает негодный id_token',
+      [400, 401, 422].includes(idToken.status),
+      `статус ${idToken.status}` + (idToken.status >= 500 ? ' — падение вместо отказа' : ''),
+    );
+    record(
+      'B2',
+      'негодный id_token не выдаёт токенов',
+      !idToken.json?.access_token,
+      idToken.json?.access_token ? 'сервер вернул токен на выдуманный id_token' : '',
+    );
+  }
+
+  /**
+   * Браузерный путь: обмен одноразового кода на пару JWT. Настоящего кода у
+   * скрипта нет, поэтому проверяется поведение на заведомо негодном — сервер
+   * обязан его ОТВЕРГНУТЬ, а не упасть пятисоткой и не завести сессию.
+   */
+  const exchange = await call('/v1/auth/google/exchange', {
+    method: 'POST',
+    body: { code: 'contract-test-not-a-real-code' },
+  });
+
+  if (exchange.status === 404) {
+    record('B2', 'POST /v1/auth/google/exchange', false, 'эндпоинта не существует (404)');
+    record('B1', 'выдача access + refresh токенов', false, 'недостижимо: нет обмена');
+  } else {
+    record(
+      'B2',
+      'POST /v1/auth/google/exchange отвергает негодный код',
+      [400, 401, 422].includes(exchange.status),
+      `статус ${exchange.status}` + (exchange.status >= 500 ? ' — падение вместо отказа' : ''),
+    );
+    record(
+      'B2',
+      'негодный код не выдаёт токенов',
+      !exchange.json?.access_token,
+      exchange.json?.access_token ? 'сервер вернул токен на выдуманный код' : '',
+    );
+  }
+
+  const me = await call('/auth/me');
+  record(
+    'B1',
+    'GET /auth/me без токена отвечает 401',
+    me.status === 401,
+    me.status === 200 ? 'пускает без токена' : me.status !== 401 ? `статус ${me.status}` : '',
+  );
+
+  const refresh = await call('/v1/auth/refresh', {
+    method: 'POST',
+    body: { refresh_token: tokens.refresh ?? 'nonexistent' },
+  });
   record('B1', 'POST /v1/auth/refresh существует', refresh.status !== 404, refresh.status === 404 ? 'эндпоинта нет' : `статус ${refresh.status}`);
+
+  if (!tokens.access) {
+    console.log('     ↳ дальше нужен живой токен: SORO_ACCESS_TOKEN=<access> node scripts/check-contract.mjs <адрес>');
+  }
 }
 
 async function checkChats() {
@@ -191,7 +230,8 @@ async function checkChats() {
 async function checkExtras() {
   console.log('\nB5 — удаление аккаунта');
 
-  const del = await call('/v1/account', { method: 'DELETE', auth: true, body: { password: 'x' } });
+  // Без тела: пароля у аккаунта Google нет, подтверждать удаление нечем.
+  const del = await call('/v1/account', { method: 'DELETE', auth: true });
   record('B5', 'DELETE /v1/account существует', del.status !== 404, del.status === 404 ? 'эндпоинта нет — требование обоих магазинов' : `статус ${del.status}`);
 
   // B11 — СПРАВОЧНО, не блокирует. Оценку 👍/👎 и жалобу убрали из приложения

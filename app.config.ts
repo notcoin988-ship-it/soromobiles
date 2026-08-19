@@ -29,6 +29,44 @@ import type { ExpoConfig } from 'expo/config';
  */
 const IS_DEV = !(process.env.EXPO_PUBLIC_API_URL ?? '').startsWith('https://');
 
+/**
+ * Пины сертификата для iOS (§11) — те же ключи, что у Android.
+ *
+ * Источник истины один: plugins/withAndroidCertificatePinning.js, там же
+ * разобрано, почему пиннится КОРЕНЬ цепочки Let's Encrypt, а не лист (лист
+ * перевыпускается каждые 90 дней и превратил бы установленные приложения в
+ * кирпич), и как отпечатки сняты с живой цепочки.
+ *
+ * Продублированы здесь, а не импортированы из плагина: плагин — CommonJS-файл
+ * для config-plugins, и тянуть его require в типизированный конфиг ради двух
+ * строк дороже, чем держать рядом. При ротации менять В ОБОИХ местах — об этом
+ * же предупреждает комментарий в плагине.
+ *
+ * На iOS пиннинг задаётся через NSPinnedDomains в App Transport Security
+ * (iOS 14+): система проверяет цепочку сама, до того как запрос дойдёт до
+ * приложения. Отдельной библиотеки не нужно — и это важно, потому что
+ * TrustKit и аналоги на New Architecture тянут за собой правку нативного кода.
+ */
+const CERTIFICATE_PINS = [
+  // ISRG Root X2 — текущий якорь доверия цепочки.
+  { 'SPKI-SHA256-BASE64': 'diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=' },
+  // Root YE — резервный корень из той же цепочки. §11 требует два ключа:
+  // без резерва ротация корня убьёт все установленные приложения.
+  { 'SPKI-SHA256-BASE64': 'sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w=' },
+];
+
+/** Домены API: основной и зеркало — как в network_security_config Android. */
+const PINNED_DOMAINS = {
+  'api.sorollm.tj': {
+    NSIncludesSubdomains: false,
+    NSPinnedCAIdentities: CERTIFICATE_PINS,
+  },
+  'api.sorollm.ai': {
+    NSIncludesSubdomains: false,
+    NSPinnedCAIdentities: CERTIFICATE_PINS,
+  },
+};
+
 const config: ExpoConfig = {
   name: 'Soro',
   /**
@@ -60,8 +98,8 @@ const config: ExpoConfig = {
     buildNumber: '1',
 
     /**
-     * Зеркало android.usesCleartextTraffic (§11): открытый HTTP разрешён
-     * ТОЛЬКО в дев-сборке против мока, в релизе остаётся чистый ATS.
+     * ЧАСТЬ ИСТОРИИ, которая объясняет блок ниже: открытый HTTP разрешён
+     * ТОЛЬКО в дев-сборке, в релизе остаётся чистый ATS.
      *
      * Без этого блока iPhone молча не достучится до мок-сервера. App
      * Transport Security режет любой http:// на уровне системы, причём
@@ -75,18 +113,84 @@ const config: ExpoConfig = {
      * *.local) — ровно на мок в домашней сети. Выход в открытый интернет по
      * HTTP остаётся закрытым даже в дев-сборке.
      */
-    infoPlist: IS_DEV
-      ? {
-          NSAppTransportSecurity: { NSAllowsLocalNetworking: true },
-          /**
-           * iOS 14+ спрашивает разрешение на обращение к устройствам
-           * локальной сети. Без строки-обоснования система не может показать
-           * запрос и глушит соединение молча — тот же симптом, что и выше.
-           */
-          NSLocalNetworkUsageDescription:
-            'Барои пайваст шудан ба сервери озмоишӣ дар шабакаи маҳаллӣ.',
-        }
-      : undefined,
+    /**
+     * Манифест приватности (PrivacyInfo.xcprivacy). Обязателен с мая 2024:
+     * App Store Connect отклоняет загрузку, если приложение обращается к
+     * «API с обязательным обоснованием», а причина не заявлена.
+     *
+     * Проверено: ни react-native-mmkv, ни @op-engineering/op-sqlite, ни
+     * expo-secure-store, ни expo-web-browser своего манифеста НЕ поставляют —
+     * значит заявлять за них должно приложение, иначе это всплывёт письмом
+     * ITMS-91053 после первой же загрузки.
+     *
+     * Заявлены ровно две категории, обе используются на самом деле:
+     *   • UserDefaults (CA92.1) — RN и Expo хранят там свои настройки, доступ
+     *     только к контейнеру собственного приложения;
+     *   • FileTimestamp (C617.1) — база op-sqlite и expo-file-system читают
+     *     время файлов внутри контейнера приложения.
+     *
+     * NSPrivacyTracking: false — §13 запрещает сторонние трекеры, рекламного
+     * идентификатора приложение не касается вовсе.
+     *
+     * Состав собираемых данных (почта, имя, тексты диалогов) заявляется НЕ
+     * здесь, а в анкете App Privacy в App Store Connect: манифест описывает
+     * доступ к системным API, а не продуктовую политику.
+     */
+    privacyManifests: {
+      NSPrivacyTracking: false,
+      NSPrivacyTrackingDomains: [],
+      NSPrivacyCollectedDataTypes: [],
+      NSPrivacyAccessedAPITypes: [
+        {
+          NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryUserDefaults',
+          NSPrivacyAccessedAPITypeReasons: ['CA92.1'],
+        },
+        {
+          NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryFileTimestamp',
+          NSPrivacyAccessedAPITypeReasons: ['C617.1'],
+        },
+      ],
+    },
+
+    infoPlist: {
+      /**
+       * Экспортное заявление (Apple Export Compliance).
+       *
+       * false означает не «шифрования нет», а «используется только штатный
+       * HTTPS системы» — это освобождённая категория. Без ключа App Store
+       * Connect задаёт вопрос про экспорт при КАЖДОЙ загрузке в TestFlight и
+       * держит сборку в обработке, пока на него не ответят руками.
+       */
+      ITSAppUsesNonExemptEncryption: false,
+
+      /**
+       * ATS: пиннинг сертификата (§11) — паритет с Android, где то же самое
+       * делает plugins/withAndroidCertificatePinning.js.
+       *
+       * В дев-сборке к пиннингу добавляется послабление для локальной сети:
+       * без него iPhone молча не достучится до сервера в домашней сети, и
+       * ошибка придёт в приложение обычным сетевым сбоем.
+       *
+       * NSAllowsLocalNetworking, а не NSAllowsArbitraryLoads: послабление
+       * действует только на приватные диапазоны (192.168.*, 10.*, *.local).
+       * Выход в открытый интернет по HTTP закрыт даже в дев-сборке.
+       */
+      NSAppTransportSecurity: IS_DEV
+        ? { NSAllowsLocalNetworking: true, NSPinnedDomains: PINNED_DOMAINS }
+        : { NSPinnedDomains: PINNED_DOMAINS },
+
+      ...(IS_DEV
+        ? {
+            /**
+             * iOS 14+ спрашивает разрешение на обращение к устройствам
+             * локальной сети. Без строки-обоснования система не может показать
+             * запрос и глушит соединение молча — тот же симптом, что и выше.
+             */
+            NSLocalNetworkUsageDescription:
+              'Барои пайваст шудан ба сервери озмоишӣ дар шабакаи маҳаллӣ.',
+          }
+        : {}),
+    },
   },
   android: {
     package: 'ai.zypl.soro',
@@ -204,6 +308,13 @@ const config: ExpoConfig = {
     // Let's Encrypt перевыпускается каждые 90 дней, и пин на лист убил бы все
     // установленные приложения. Обоснование — в комментарии плагина.
     './plugins/withAndroidCertificatePinning',
+    /**
+     * Нативный вход через Google (системный лист выбора аккаунта).
+     * Плагин добавляет в Android-сборку зависимости Play Services Auth, а на
+     * iOS — URL-схему клиента. iosUrlScheme появится здесь, когда в консоли
+     * заведут OAuth-клиент типа iOS: до тех пор iPhone идёт браузерным путём.
+     */
+    '@react-native-google-signin/google-signin',
   ],
 
   /**
@@ -216,6 +327,19 @@ const config: ExpoConfig = {
     eas: {
       projectId: '68b192f4-0338-4c56-bb46-8ccc29e26f2d',
     },
+
+    /**
+     * Идентификатор web-клиента сайта sorollm.tj, доступный приложению в
+     * рантайме через expo-constants.
+     *
+     * Не секрет: он виден в любом OAuth-запросе с сайта. Нативному входу он
+     * нужен как «получатель» (aud) выданного Google id_token — по нему сервер
+     * убеждается, что токен выпущен для нас, а не для чужого приложения.
+     * Здесь, а не константой в коде: §6.1 не велит зашивать адреса и
+     * идентификаторы в экраны.
+     */
+    googleWebClientId:
+      '480387520142-kvn3qpi2rtvvopo3g93qpn5c3vc8doht.apps.googleusercontent.com',
   },
 };
 

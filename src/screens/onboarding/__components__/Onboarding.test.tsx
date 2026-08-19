@@ -2,6 +2,7 @@ import React from 'react';
 import { fireEvent, render } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import AskNameScreen from '../AskNameScreen';
 import ChooseLanguageScreen from '../ChooseLanguageScreen';
 import DisclaimerScreen from '../DisclaimerScreen';
 import { useSettingsStore } from '../../../store/settings';
@@ -91,5 +92,33 @@ describe('онбординг: дисклеймер', () => {
     await fireEvent.press(ui.getByTestId('consent-link-privacy'));
 
     expect(ui.getByText('Сиёсати ҳифзи махфият – SoroLLM')).toBeTruthy();
+  });
+});
+
+describe('онбординг: имя', () => {
+  /**
+   * Экран появился вместо поля «Ном ва насаб» из удалённой формы регистрации:
+   * вход через Google своей формы не имеет, а приветствие в чате должно звать
+   * человека так, как он сам себя назвал.
+   */
+  it('пустое имя не пропускается дальше', async () => {
+    const onContinue = jest.fn();
+    const ui = await wrap(<AskNameScreen onContinue={onContinue} />);
+
+    await fireEvent.press(ui.getByTestId('onboarding-name-continue'));
+
+    expect(onContinue).not.toHaveBeenCalled();
+    // Кнопка не заблокирована — вместо молчания человек получает объяснение.
+    expect(ui.getByText('Номи худро нависед')).toBeTruthy();
+  });
+
+  it('имя уходит наружу без лишних пробелов', async () => {
+    const onContinue = jest.fn();
+    const ui = await wrap(<AskNameScreen onContinue={onContinue} />);
+
+    await fireEvent.changeText(ui.getByTestId('onboarding-name'), '  Далер ');
+    await fireEvent.press(ui.getByTestId('onboarding-name-continue'));
+
+    expect(onContinue).toHaveBeenCalledWith('  Далер ');
   });
 });

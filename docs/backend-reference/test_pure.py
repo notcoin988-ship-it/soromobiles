@@ -4,7 +4,7 @@
     py test_pure.py
 
 Покрывают то, что действительно можно сломать незаметно: обрезку заголовка,
-разрешение профилей моделей, нормализацию почты, правила паролей и лимиты.
+разрешение профилей моделей, хеширование одноразовых кодов и лимиты.
 
 Остальные файлы в папке зависят от FastAPI и SQLAlchemy — их проверяет только
 _syntax_check.py. Это надо понимать честно: синтаксис ≠ работоспособность.
@@ -15,14 +15,10 @@ import unittest
 from pure import (
     CHAT_TITLE_MAX_LENGTH,
     DEFAULT_CHAT_TITLE,
-    MIN_PASSWORD_LENGTH,
     daily_limit_for,
-    generate_code,
     hash_code,
     is_streamable,
     make_chat_title,
-    normalize_email,
-    password_problem,
     resolve_profile,
 )
 
@@ -96,56 +92,14 @@ class ModelProfiles(unittest.TestCase):
         self.assertTrue(is_streamable("translate"))
 
 
-class EmailNormalization(unittest.TestCase):
-    """B2 — уникальность по email работает только при нормализации."""
-
-    def test_регистр_и_пробелы_не_создают_второй_аккаунт(self):
-        self.assertEqual(normalize_email("  Ivan@Mail.RU "), "ivan@mail.ru")
-
-    def test_уже_нормализованная_не_меняется(self):
-        self.assertEqual(normalize_email("a@b.tj"), "a@b.tj")
-
-
-class Passwords(unittest.TestCase):
-    """§6.6 — минимум 8 символов и проверка на частые пароли."""
-
-    def test_минимум_восемь_символов(self):
-        self.assertEqual(MIN_PASSWORD_LENGTH, 8)
-        self.assertIsNotNone(password_problem("a" * 7))
-        self.assertIsNone(password_problem("a" * 8))
-
-    def test_частый_пароль_отвергается_несмотря_на_длину(self):
-        self.assertIsNotNone(password_problem("12345678"))
-        self.assertIsNotNone(password_problem("PassWord"))  # регистр не спасает
-
-    def test_нормальный_пароль_проходит(self):
-        self.assertIsNone(password_problem("parolContract123"))
-
-
 class Codes(unittest.TestCase):
-    """§6.6 — код подтверждения: 6 цифр."""
+    """Одноразовый код входа через Google хранится хешем."""
 
-    def test_всегда_шесть_цифр(self):
-        for _ in range(200):
-            code = generate_code()
-            self.assertEqual(len(code), 6, code)
-            self.assertTrue(code.isdigit(), code)
-
-    def test_ведущие_нули_сохраняются(self):
-        """Если форматировать через str(), код 42 станет «42», а не «000042»."""
-        codes = {generate_code() for _ in range(2000)}
-        self.assertTrue(any(c.startswith("0") for c in codes))
-
-    def test_коды_не_повторяются_подряд(self):
-        """Грубая проверка, что источник случайности вообще работает."""
-        codes = [generate_code() for _ in range(50)]
-        self.assertGreater(len(set(codes)), 40)
-
-    def test_хеш_устойчив_к_пробелам_от_вставки_из_буфера(self):
-        self.assertEqual(hash_code(" 123456 "), hash_code("123456"))
+    def test_хеш_устойчив_к_пробелам(self):
+        self.assertEqual(hash_code(" abc "), hash_code("abc"))
 
     def test_разные_коды_дают_разные_хеши(self):
-        self.assertNotEqual(hash_code("123456"), hash_code("123457"))
+        self.assertNotEqual(hash_code("abc"), hash_code("abd"))
 
 
 class Limits(unittest.TestCase):

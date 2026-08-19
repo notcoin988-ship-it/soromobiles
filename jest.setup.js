@@ -52,6 +52,22 @@ jest.mock('@react-native-community/netinfo', () => ({
 // достаточно пустых компонентов.
 jest.mock('lottie-react-native', () => 'LottieView');
 
+/**
+ * Нативный вход через Google. В Node его нативной части нет вовсе, а
+ * компонентные тесты до окна выбора аккаунта не доходят: экран входа
+ * проверяется по тому, что он зовёт стор, а сам вход — на устройстве.
+ */
+jest.mock('@react-native-google-signin/google-signin', () => ({
+  GoogleSignin: {
+    configure: jest.fn(),
+    hasPlayServices: jest.fn(async () => true),
+    signIn: jest.fn(async () => ({ type: 'cancelled' })),
+    signOut: jest.fn(async () => null),
+  },
+  isErrorWithCode: () => false,
+  statusCodes: { SIGN_IN_CANCELLED: '12501', IN_PROGRESS: '12502' },
+}));
+
 jest.mock('@sentry/react-native', () => ({
   init: jest.fn(),
   captureException: jest.fn(),

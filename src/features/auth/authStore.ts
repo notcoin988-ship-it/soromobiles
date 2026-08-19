@@ -1,83 +1,61 @@
 import { create } from 'zustand';
 
-import { api, setUnauthorizedHandler } from '../../api';
-import { authErrorCode, messageKeyFor } from '../../api/errors';
+import { api, API_BASE_URL, setUnauthorizedHandler } from '../../api';
+import { messageKeyFor } from '../../api/errors';
 import * as authApi from '../../api/endpoints/auth';
 import type { AuthSession, User } from '../../api/types';
+import type { ThemeName } from '../../design/tokens';
 import * as db from '../../db';
 import { settingsStorage as localDataStorage } from '../../store/kv';
 import { track } from '../../telemetry/events';
+import { startGoogleSignIn } from './googleSignIn';
 import { shouldWipeLocalData } from './localDataOwner';
 import { secureTokenStore } from './tokenStore';
-import { mapAuthErrorCode } from './validation';
 
 /** Владелец локальной базы. Не секрет — просто id, поэтому MMKV, а не Keystore. */
 const OWNER_KEY = 'db.owner.v1';
 
 /**
- * Состояние авторизации (§8.2).
+ * Состояние авторизации (§8.2 в редакции после перехода на Google).
  *
- * Экраны не ходят в api/ напрямую — они дёргают эти действия и читают
- * status/fieldErrors. Так вся обработка кодов ошибок §6.6 живёт в одном месте.
+ * Вход один: «Идома бо Google». Ни форм, ни кодов из письма, ни сброса
+ * пароля — вместе с ними из стора ушли pendingEmail, fieldErrors и таймер
+ * повторной отправки. Осталось два исхода: вошли либо не вошли.
  *
  * Сессия долгая: при открытии приложения повторный вход не запрашивается
  * (§6.2) — на старте пробуем восстановить пользователя по сохранённому
  * refresh-токену.
  */
 
-export type AuthStatus = 'unknown' | 'signedOut' | 'pendingVerification' | 'signedIn';
+export type AuthStatus = 'unknown' | 'signedOut' | 'signedIn';
 
 export type AuthState = {
   status: AuthStatus;
   user: User | null;
-  /** Почта, ожидающая подтверждения, — нужна экрану ввода кода. */
-  pendingEmail: string | null;
   busy: boolean;
-  /** Ошибка под конкретным полем (§8.2), уже как i18n-ключ. */
-  fieldErrors: Partial<Record<'email' | 'password' | 'code' | 'fullname', string>>;
-  /** Ошибка уровня формы, когда её не к чему привязать. */
+  /** Ошибка входа как i18n-ключ. Поля формы, под которое её вешать, больше нет. */
   formError: string | null;
-  /** Момент последней отправки письма — для таймера повторной отправки. */
-  lastCodeSentAt: number | null;
 };
 
 export type AuthActions = {
   restore: () => Promise<void>;
-  signIn: (email: string, password: string) => Promise<void>;
-  signUp: (params: { email: string; password: string; fullname: string; lang: string }) => Promise<void>;
-  verify: (code: string) => Promise<void>;
-  resend: () => Promise<void>;
-  forgotPassword: (email: string) => Promise<void>;
-  resetPassword: (params: { code: string; newPassword: string }) => Promise<void>;
+  /** Тема нужна встроенному браузеру: его панель красится в цвета приложения. */
+  signInWithGoogle: (themeName: ThemeName) => Promise<void>;
   signOut: () => Promise<void>;
   clearErrors: () => void;
 };
 
 const CLEAN = {
   busy: false,
-  fieldErrors: {},
   formError: null,
-} satisfies Pick<AuthState, 'busy' | 'fieldErrors' | 'formError'>;
+} satisfies Pick<AuthState, 'busy' | 'formError'>;
 
-export const useAuthStore = create<AuthState & AuthActions>()((set, get) => {
-  /** Общая обработка неуспеха: раскладывает ошибку по полям формы. */
-  const fail = (error: Parameters<typeof messageKeyFor>[0], body?: unknown) => {
-    const code = authErrorCode(body);
-    const mapped = mapAuthErrorCode(code);
-
-    if (mapped.field) {
-      set({ ...CLEAN, fieldErrors: { [mapped.field]: mapped.messageKey } });
-    } else {
-      // Кода нет — показываем сетевую причину: нет связи / медленно / сервер.
-      set({ ...CLEAN, formError: code ? mapped.messageKey : messageKeyFor(error) });
-    }
-  };
-
+export const useAuthStore = create<AuthState & AuthActions>()((set) => {
   /**
-   * Единственная точка, через которую проходят ВСЕ успешные входы: обычный
-   * вход, подтверждение почты после регистрации и сброс пароля. Поэтому
-   * проверка владельца локальных данных стоит здесь — иначе её пришлось бы
-   * повторять трижды и однажды забыть.
+   * Единственная точка, через которую проходит успешный вход. Проверка
+   * владельца локальных данных стоит здесь, а не в экране: чужая переписка на
+   * устройстве — это утечка (§11), и полагаться на то, что её не забудут
+   * позвать, нельзя.
    */
   const succeed = async (session: AuthSession) => {
     const previousOwner = localDataStorage.getString(OWNER_KEY) ?? null;
@@ -96,15 +74,13 @@ export const useAuthStore = create<AuthState & AuthActions>()((set, get) => {
     }
 
     void secureTokenStore.save(session);
-    set({ ...CLEAN, status: 'signedIn', user: session.user, pendingEmail: null });
+    set({ ...CLEAN, status: 'signedIn', user: session.user });
   };
 
   return {
     status: 'unknown',
     user: null,
-    pendingEmail: null,
     ...CLEAN,
-    lastCodeSentAt: null,
 
     async restore() {
       // Долгая сессия (§6.2): при живом refresh-токене клиент сам продлит
@@ -117,105 +93,59 @@ export const useAuthStore = create<AuthState & AuthActions>()((set, get) => {
       }
     },
 
-    async signIn(email, password) {
+    async signInWithGoogle(themeName) {
       set({ ...CLEAN, busy: true });
-      const result = await authApi.login(api, { email: email.trim(), password });
-      if (result.ok) return succeed(result.data);
 
-      // 403 email_not_verified — это не тупик: уводим на экран ввода кода.
-      if (result.error.kind === 'validation' && result.error.status === 403) {
-        set({ ...CLEAN, status: 'pendingVerification', pendingEmail: email.trim() });
-        return;
-      }
-      fail(result.error, undefined);
-      // Сообщение о неверных данных вешаем на пароль (§8.2).
-      if (result.error.kind === 'unauthorized') {
-        set({ ...CLEAN, fieldErrors: { password: 'authErrors.badCredentials' } });
-      }
-    },
-
-    async signUp({ email, password, fullname, lang }) {
-      set({ ...CLEAN, busy: true });
-      // §13: считаем НАЧАТЫЕ регистрации, а не только завершённые — иначе не
-      // видно, на каком шаге люди отваливаются.
+      /**
+       * §13: считаем НАЧАТЫЕ входы, а не только завершённые — иначе не видно,
+       * сколько людей закрывает окно Google, не дойдя до конца. Отличить
+       * здесь регистрацию от возврата невозможно: это знает только сервер,
+       * поэтому signup_completed отправляется ниже по его ответу.
+       */
       track({ name: 'signup_started' });
 
-      const result = await authApi.register(api, {
-        email: email.trim(),
-        password,
-        fullname: fullname.trim(),
-        lang,
-      });
+      const auth = await startGoogleSignIn(API_BASE_URL, themeName);
 
-      if (result.ok) {
-        set({
-          ...CLEAN,
-          status: 'pendingVerification',
-          pendingEmail: email.trim(),
-          lastCodeSentAt: Date.now(),
-        });
+      if (!auth.ok) {
+        // Закрыл окно сам — это не ошибка, плашку показывать не за что.
+        set({ ...CLEAN, formError: auth.reason === 'cancelled' ? null : 'authErrors.googleFailed' });
         return;
       }
-      // 409 на регистрации — «почта уже занята» (§6.5).
-      if (result.error.kind === 'validation' && result.error.status === 409) {
-        set({ ...CLEAN, fieldErrors: { email: 'authErrors.emailTaken' } });
-        return;
-      }
-      fail(result.error, undefined);
-    },
 
-    async verify(code) {
-      const email = get().pendingEmail;
-      if (!email) return;
+      /**
+       * Нативное окно приносит id_token самого Google, браузер — одноразовый
+       * код нашего сервера. Проверяются они разными ручками, поэтому выбор
+       * здесь, а не внутри googleSignIn: слой api не должен знать, каким
+       * окном человек вошёл.
+       */
+      const result =
+        auth.credential.kind === 'idToken'
+          ? await authApi.signInWithGoogleIdToken(api, auth.credential.idToken)
+          : await authApi.exchangeGoogleCode(api, auth.credential.code);
 
-      set({ ...CLEAN, busy: true });
-      const result = await authApi.verifyEmail(api, { email, code: code.trim() });
       if (result.ok) {
-        // Регистрация считается завершённой только после подтверждения почты:
-        // до него аккаунтом пользоваться нельзя (§8.2).
-        track({ name: 'signup_completed' });
+        // Новый аккаунт заводится молча, без отдельного экрана регистрации:
+        // признак приходит с сервера, потому что на клиенте вход и первая
+        // регистрация выглядят одинаково.
+        if (result.data.is_new_user) track({ name: 'signup_completed' });
         return succeed(result.data);
       }
 
-      // 400 invalid_code / expired_code — обе под полем кода.
-      set({ ...CLEAN, fieldErrors: { code: 'authErrors.invalidCode' } });
-    },
+      /**
+       * Просроченный или уже использованный код — это ЧУЖАЯ ошибка только на
+       * вид: чаще всего человек слишком долго держал окно открытым. Сетевую
+       * причину (нет связи, медленно, сервер лежит) показываем как есть,
+       * остальное — общей просьбой попробовать ещё раз.
+       */
+      const networkKind =
+        result.error.kind === 'offline' ||
+        result.error.kind === 'timeout' ||
+        result.error.kind === 'server';
 
-    async resend() {
-      const email = get().pendingEmail;
-      if (!email) return;
-      await authApi.resendCode(api, email);
-      set({ lastCodeSentAt: Date.now() });
-    },
-
-    async forgotPassword(email) {
-      set({ ...CLEAN, busy: true });
-      // Сервер всегда отвечает 202, чтобы не раскрывать наличие аккаунта (§6.6),
-      // поэтому успех здесь ничего не подтверждает — просто ведём дальше.
-      await authApi.forgotPassword(api, email.trim());
-      set({ ...CLEAN, pendingEmail: email.trim(), lastCodeSentAt: Date.now() });
-    },
-
-    async resetPassword({ code, newPassword }) {
-      const email = get().pendingEmail;
-      if (!email) return;
-
-      set({ ...CLEAN, busy: true });
-      const result = await authApi.resetPassword(api, {
-        email,
-        code: code.trim(),
-        new_password: newPassword,
+      set({
+        ...CLEAN,
+        formError: networkKind ? messageKeyFor(result.error) : 'authErrors.googleFailed',
       });
-
-      // Успех сразу вводит в приложение — по §8.2 после смены пароля человек
-      // попадает в чат, а не обратно на экран входа.
-      if (result.ok) return succeed(result.data);
-
-      if (result.error.kind === 'validation' && result.error.status === 422) {
-        set({ ...CLEAN, fieldErrors: { password: 'authErrors.passwordTooShort' } });
-        return;
-      }
-      set({ ...CLEAN, fieldErrors: { code: 'authErrors.invalidCode' } });
     },
 
     async signOut() {
@@ -242,11 +172,11 @@ export const useAuthStore = create<AuthState & AuthActions>()((set, get) => {
         // Останется на следующий вход — там сверка владельца всё равно есть.
       }
 
-      set({ ...CLEAN, status: 'signedOut', user: null, pendingEmail: null });
+      set({ ...CLEAN, status: 'signedOut', user: null });
     },
 
     clearErrors() {
-      set({ fieldErrors: {}, formError: null });
+      set({ formError: null });
     },
   };
 });

@@ -45,6 +45,7 @@ import {
 import { useChatStore, type ChatMessage } from '../features/chat/chatStore';
 import { useChats } from '../features/history/useChats';
 import { useAuthStore } from '../features/auth/authStore';
+import { useOnboardingStore } from '../store/onboarding';
 import { useFontScale, useSettingsStore, useTheme, useThemeName } from '../store/settings';
 
 /**
@@ -61,6 +62,13 @@ export default function ChatScreen() {
   const insets = useSafeAreaInsets();
 
   const user = useAuthStore((s) => s.user);
+  /**
+   * В приветствии — имя с экрана первого запуска, а не из аккаунта Google.
+   * Человек назвал его сам; строка из профиля Google бывает рабочим ФИО или
+   * латиницей и на «Салом, …» ложится плохо. Если имени нет (аккаунт заведён
+   * до появления экрана), падаем обратно на первое слово из профиля.
+   */
+  const preferredName = useOnboardingStore((s) => s.name);
   const suggestions = useSuggestions();
   const messages = useChatStore((s) => s.messages);
   const generating = useChatStore((s) => s.generating);
@@ -215,7 +223,7 @@ export default function ChatScreen() {
             style={[scaleText(typography.greeting, scale), { color: theme.text }]}
             maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
           >
-            {t('chat.greeting', { name: user?.fullname?.split(' ')[0] ?? '' })}
+            {t('chat.greeting', { name: preferredName ?? user?.fullname?.split(' ')[0] ?? '' })}
           </Text>
           <Text
             style={[scaleText(typography.subgreeting, scale), { color: theme.text2 }]}

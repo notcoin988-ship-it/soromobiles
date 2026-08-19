@@ -11,6 +11,9 @@ Apple Guideline 5.1.1(v), Google Play — аналогично. Приложен
   * отзывает все refresh-токены;
   * логирует факт удаления БЕЗ персональных данных для аудита.
 
+Тела у запроса нет: вход только через Google, подтверждать удаление паролем
+нечем (см. комментарий у самого обработчика).
+
 Плюс отдельно нужна публичная веб-страница https://sorollm.tj/delete-account —
 пользователь должен иметь возможность запросить удаление БЕЗ установки
 приложения. Ссылка указывается в Play Console. Черновик её эндпоинта — внизу.
@@ -22,54 +25,44 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
-from ..deps import current_user
+from ..deps import current_user, current_user_hybrid
 from ..models import (
     Chat,
     Feedback,
     Message,
+    MobileAuthCode,
     RefreshToken,
     TokenUsage,
     User,
-    VerificationCode,
 )
-from ..security import verify_password
 
 router = APIRouter(prefix="/v1", tags=["account"])
 
 logger = logging.getLogger("account.deletion")
 
 
-class DeleteAccountRequest(BaseModel):
-    # Подтверждение для email-аккаунтов. У пришедших через Google пароля нет.
-    password: str | None = None
-
-
 @router.delete("/account")
 async def delete_account(
-    body: DeleteAccountRequest,
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
 ):
     """
     Удаление аккаунта и всех данных.
 
-    Пароль обязателен, если он у аккаунта есть: удаление необратимо, и
-    случайный тап по кнопке на чужом разблокированном телефоне не должен
-    стирать переписку.
-    """
-    if user.password_hash:
-        if not body.password or not verify_password(body.password, user.password_hash):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "bad_credentials"},
-            )
+    БЕЗ ТЕЛА И БЕЗ ПОДТВЕРЖДЕНИЯ ПАРОЛЕМ. Вход в приложении только через
+    Google, пароля у такого аккаунта нет вовсе — требовать его значило бы
+    закрыть удаление наглухо, а это прямое нарушение Apple 5.1.1(v) и
+    требований Google Play.
 
+    От случайного нажатия защищает приложение: удаление стоит за отдельным
+    подтверждением на экране настроек. Само право удалить подтверждено
+    access-токеном — им владеет только тот, кто прошёл вход через Google.
+    """
     user_id = user.id
     # Данные для аудита собираем ДО удаления, но БЕЗ персональных сведений:
     # ни почты, ни имени, ни текстов диалогов (§13 — Sentry и логи без PII).
@@ -118,12 +111,9 @@ async def purge_user_data(session: AsyncSession, user_id: uuid.UUID) -> None:
     # Все refresh-токены: после удаления по ним не должно выдаваться access.
     await session.execute(delete(RefreshToken).where(RefreshToken.user_id == user_id))
 
-    # Незакрытые коды подтверждения на эту почту.
-    user = await session.get(User, user_id)
-    if user is not None and user.email:
-        await session.execute(
-            delete(VerificationCode).where(VerificationCode.email == user.email)
-        )
+    # Невыкупленные одноразовые коды входа: они живут минуты, но по коду,
+    # выданному за секунду до удаления, иначе ещё можно получить сессию.
+    await session.execute(delete(MobileAuthCode).where(MobileAuthCode.user_id == user_id))
 
     # ЗАМЕНИТЬ: если в проекте есть проекты (/v1/project/*) и вложения —
     # добавить их сюда. §6.6 требует удалять и их тоже.
@@ -138,36 +128,35 @@ async def purge_user_data(session: AsyncSession, user_id: uuid.UUID) -> None:
 # Пользователь должен иметь возможность запросить удаление, НЕ устанавливая
 # приложение. Ссылка указывается в Play Console.
 #
-# Форма на https://sorollm.tj/delete-account отправляет сюда почту и пароль,
-# сервер удаляет аккаунт тем же кодом. Отдельный эндпоинт нужен потому, что у
-# пользователя нет токена: он не в приложении.
-
-class PublicDeleteRequest(BaseModel):
-    email: str
-    password: str
-
+# Страница https://sorollm.tj/delete-account предлагает войти через Google —
+# тем же входом, что и весь сайт, — и удаляет аккаунт вошедшего. Пароля она не
+# спрашивает: его у аккаунта Google нет.
+#
+# Эндпоинт отдельный от DELETE /v1/account потому, что у веба другая
+# авторизация: cookie-сессия, а не Bearer. Приложение сюда не ходит.
 
 @router.post("/account/delete-request")
 async def public_delete_request(
-    body: PublicDeleteRequest,
+    user: User = Depends(current_user_hybrid),
     session: AsyncSession = Depends(get_session),
 ):
     """
     Удаление аккаунта с публичной веб-страницы.
 
-    Отвечает 200 ВСЕГДА, даже если почта не найдена или пароль неверен: иначе
-    страница становится способом проверять, зарегистрирован ли человек, и
-    подбирать пароли без всякой защиты приложения.
+    current_user_hybrid (deps.py) принимает и cookie-сессию сайта, и Bearer —
+    поэтому страница работает сразу после входа через Google, без отдельного
+    механизма подтверждения.
 
-    Реальный результат пользователь узнаёт из письма.
+    Незалогиненный получает 401 и кнопку «Войти через Google»: анонимный
+    запрос на удаление по одной лишь почте был бы способом стирать чужие
+    аккаунты, а «отвечаем 200 всем» — способом проверять, кто зарегистрирован.
     """
-    email = body.email.strip().lower()
-    user = await session.scalar(select(User).where(User.email == email))
+    user_id = user.id
 
-    if user is not None and user.password_hash and verify_password(body.password, user.password_hash):
-        await purge_user_data(session, user.id)
-        await session.delete(user)
-        await session.commit()
-        logger.info("account deleted via web form", extra={"user_id": str(user.id)})
+    await purge_user_data(session, user_id)
+    await session.delete(user)
+    await session.commit()
 
-    return {"status": "accepted"}
+    logger.info("account deleted via web form", extra={"user_id": str(user_id)})
+
+    return {"status": "deleted"}

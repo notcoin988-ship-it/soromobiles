@@ -12,7 +12,6 @@ test_pure.py.
 from __future__ import annotations
 
 import hashlib
-import secrets
 
 # --- B10: заголовок чата -----------------------------------------------------
 
@@ -63,42 +62,16 @@ def is_streamable(model: str | None) -> bool:
     return resolve_profile(model) != "base"
 
 
-# --- Почта и коды ------------------------------------------------------------
-
-def normalize_email(email: str) -> str:
-    """
-    Почта регистронезависима. Без нормализации Ivan@mail.ru и ivan@mail.ru
-    станут двумя аккаунтами, и «уникальность по email» (B2) перестанет работать.
-    """
-    return email.strip().lower()
-
-
-MIN_PASSWORD_LENGTH = 8  # §6.6
-
-COMMON_PASSWORDS = {
-    "password", "12345678", "qwerty123", "parol123", "11111111",
-    "123456789", "1234567890", "qwertyui", "iloveyou", "admin123",
-}
-
-
-def password_problem(password: str) -> str | None:
-    """Возвращает код ошибки или None. §6.6: минимум 8 символов + не из частых."""
-    if len(password) < MIN_PASSWORD_LENGTH:
-        return "weak_password"
-    if password.lower() in COMMON_PASSWORDS:
-        return "weak_password"
-    return None
-
-
-def generate_code() -> str:
-    """
-    Шесть цифр (§6.6). secrets, а не random: random предсказуем по нескольким
-    выданным значениям, и коды можно было бы вычислять для чужих почт.
-    """
-    return f"{secrets.randbelow(1_000_000):06d}"
-
+# --- Одноразовые коды входа --------------------------------------------------
 
 def hash_code(code: str) -> str:
+    """
+    Хеш одноразового кода входа (router_auth_google). В базе лежит он, а не сам
+    код: утечка таблицы не даёт войти.
+
+    sha256, а не bcrypt: код — это 32 случайных байта от secrets, перебирать
+    там нечего, и медленный хеш только тормозил бы вход.
+    """
     return hashlib.sha256(code.strip().encode()).hexdigest()
 
 

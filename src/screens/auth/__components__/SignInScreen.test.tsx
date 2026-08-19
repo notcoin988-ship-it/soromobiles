@@ -1,5 +1,6 @@
 import React from 'react';
 import { fireEvent, render } from '@testing-library/react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import SignInScreen from '../SignInScreen';
 import { useAuthStore } from '../../../features/auth/authStore';
@@ -7,82 +8,81 @@ import { useAuthStore } from '../../../features/auth/authStore';
 /**
  * Компонентные тесты экрана входа (§14).
  *
- * Проверяется ПОВЕДЕНИЕ, а не разметка: что форма не отправляется с пустыми
- * полями, что пароль скрыт и открывается кнопкой, что ошибка сервера видна.
- * Тесты на «есть ли такой текст» ломались бы при каждой правке формулировок
- * и не ловили бы ни одной настоящей ошибки.
+ * Проверяется ПОВЕДЕНИЕ, а не разметка: что кнопка запускает вход, что во
+ * время входа она заблокирована, что ошибка видна, что документы раскрыты до
+ * создания аккаунта. Тесты на «есть ли такой текст» ломались бы при каждой
+ * правке формулировок и не ловили бы ни одной настоящей ошибки.
  *
- * §8.2 запрещает вход через Google и гостевой режим — отдельная проверка
- * следит, чтобы они не вернулись: на сайте они есть, и соблазн «сделать как
- * в вебе» будет возникать снова.
+ * Раньше здесь стояла проверка, что кнопки Google на экране НЕТ: §8.2 её
+ * запрещал. Запрет снят — вход через Google теперь единственный, как на
+ * sorollm.tj. Взамен проверяется обратное: что полей почты и пароля не
+ * осталось, иначе форма вернётся вместе со всей перепиской по SMTP.
  *
  * В react-native-testing-library 14 render и fireEvent АСИНХРОННЫ. Без await
  * тесты молча получают промис вместо результата — на этом уже потеряли время.
  */
 
-const noop = () => {};
+/** Окно политики берёт отступы у SafeAreaProvider — без него оно падает. */
+const METRICS = {
+  frame: { x: 0, y: 0, width: 390, height: 844 },
+  insets: { top: 47, left: 0, right: 0, bottom: 34 },
+};
 
-const setup = () => render(<SignInScreen onSignUp={noop} onForgotPassword={noop} />);
+const setup = () => render(<SafeAreaProvider initialMetrics={METRICS}><SignInScreen /></SafeAreaProvider>);
 
 describe('экран входа', () => {
   beforeEach(() => {
-    useAuthStore.setState({ busy: false, fieldErrors: {}, formError: null });
+    useAuthStore.setState({ busy: false, formError: null });
   });
 
-  it('не отправляет форму с пустыми полями', async () => {
-    const signIn = jest.fn();
-    useAuthStore.setState({ signIn });
+  it('кнопка запускает вход через Google', async () => {
+    const signInWithGoogle = jest.fn();
+    useAuthStore.setState({ signInWithGoogle });
 
     const ui = await setup();
-    await fireEvent.press(ui.getByTestId('signin-submit'));
+    await fireEvent.press(ui.getByTestId('signin-google'));
 
-    expect(signIn).not.toHaveBeenCalled();
+    expect(signInWithGoogle).toHaveBeenCalledTimes(1);
+    // Тема уходит внутрь: панель встроенного браузера красится в цвета
+    // приложения, иначе поверх тёмной темы распахивается белая полоса.
+    expect(signInWithGoogle).toHaveBeenCalledWith('dark');
   });
 
-  it('не отправляет форму с некорректной почтой', async () => {
-    const signIn = jest.fn();
-    useAuthStore.setState({ signIn });
+  it('во время входа повторное нажатие не проходит', async () => {
+    // Иначе второе окно браузера открывается поверх первого, а сервер получает
+    // два OAuth-обмена, из которых сгодится только один.
+    const signInWithGoogle = jest.fn();
+    useAuthStore.setState({ signInWithGoogle, busy: true });
 
     const ui = await setup();
-    await fireEvent.changeText(ui.getByTestId('signin-email'), 'далер далеров');
-    await fireEvent.changeText(ui.getByTestId('signin-password'), 'Parol12345');
-    await fireEvent.press(ui.getByTestId('signin-submit'));
+    await fireEvent.press(ui.getByTestId('signin-google'));
 
-    expect(signIn).not.toHaveBeenCalled();
+    expect(signInWithGoogle).not.toHaveBeenCalled();
   });
 
-  it('отправляет корректные данные', async () => {
-    const signIn = jest.fn();
-    useAuthStore.setState({ signIn });
-
+  it('ни почты, ни пароля на экране не осталось', async () => {
     const ui = await setup();
-    await fireEvent.changeText(ui.getByTestId('signin-email'), 'test@zehn.ai');
-    await fireEvent.changeText(ui.getByTestId('signin-password'), 'Parol12345');
-    await fireEvent.press(ui.getByTestId('signin-submit'));
 
-    expect(signIn).toHaveBeenCalledWith('test@zehn.ai', 'Parol12345');
+    expect(ui.queryByTestId('signin-email')).toBeNull();
+    expect(ui.queryByTestId('signin-password')).toBeNull();
+    expect(ui.queryByText('Почтаи электронӣ')).toBeNull();
+    expect(ui.queryByText('Парол')).toBeNull();
   });
 
-  it('пароль скрыт, кнопка показа его открывает', async () => {
+  it('ошибка входа показывается плашкой', async () => {
+    useAuthStore.setState({ formError: 'authErrors.googleFailed' });
     const ui = await setup();
-    expect(ui.getByTestId('signin-password').props.secureTextEntry).toBe(true);
 
-    await fireEvent.press(ui.getByText('Нишон додан'));
-    expect(ui.getByTestId('signin-password').props.secureTextEntry).toBe(false);
+    expect(ui.getByText('Ворид шудан бо Google муяссар нашуд. Аз нав кӯшиш кунед')).toBeTruthy();
   });
 
-  it('§8.2: ни Google, ни гостевого входа на экране нет', async () => {
+  it('политика конфиденциальности открывается прямо с экрана входа', async () => {
+    // App Store 5.1.1 и Google User Data требуют раскрыть документы там, где
+    // заводится аккаунт, а заводится он именно здесь — отдельного экрана
+    // регистрации больше нет.
     const ui = await setup();
+    await fireEvent.press(ui.getByTestId('consent-link-privacy'));
 
-    expect(ui.queryByText(/google/i)).toBeNull();
-    expect(ui.queryByText(/меҳмон/i)).toBeNull();
-    expect(ui.queryByText(/гост/i)).toBeNull();
-  });
-
-  it('ошибка от сервера показывается плашкой', async () => {
-    useAuthStore.setState({ formError: 'errors.serverDown' });
-    const ui = await setup();
-
-    expect(ui.getByText('Сервер дастрас нест. Дертар кӯшиш кунед')).toBeTruthy();
+    expect(ui.getByTestId('legal-modal')).toBeTruthy();
   });
 });
