@@ -61,6 +61,13 @@ export type GoogleSignInResult =
  */
 const WEB_CLIENT_ID = (Constants.expoConfig?.extra?.googleWebClientId as string | undefined) ?? '';
 
+/**
+ * Клиент типа iOS. На Android не нужен вовсе — там приложение опознаётся по
+ * подписи APK, — а на iPhone без него GIDSignIn не знает, чьё это приложение,
+ * и отказывает ещё до показа окна.
+ */
+const IOS_CLIENT_ID = (Constants.expoConfig?.extra?.googleIosClientId as string | undefined) ?? '';
+
 let configured = false;
 
 function configureOnce(): boolean {
@@ -69,6 +76,8 @@ function configureOnce(): boolean {
 
   GoogleSignin.configure({
     webClientId: WEB_CLIENT_ID,
+    // Пустая строка на Android безвредна: поле там не читается.
+    iosClientId: IOS_CLIENT_ID,
     // offlineAccess даёт серверный authorization code для доступа к API Google
     // от имени человека. Нам этого не нужно — сервер только опознаёт, кто вошёл.
     offlineAccess: false,
