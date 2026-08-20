@@ -143,11 +143,24 @@ async def sign_in_with_google_id_token(
     )
 
     tokens = await issue_session(session, user)
+
+    # ПОРЯДОК ЗДЕСЬ НЕ СЛУЧАЕН, И ЕГО НЕЛЬЗЯ УПРОЩАТЬ.
+    #
+    # refresh подтягивает поля, которые проставляет сама база: у только что
+    # созданного пользователя created_at и updated_at в объекте пустые.
+    #
+    # Профиль собирается ДО commit, потому что после него SQLAlchemy помечает
+    # атрибуты устаревшими, и обращение к любому из них лезет в базу из
+    # синхронного кода pydantic — это MissingGreenlet и 500-я на каждом первом
+    # входе. Ошибка поймана стендом и воспроизводится стабильно.
+    await session.refresh(user)
+    payload = UserOut.model_validate(user)
+
     await session.commit()
 
     return GoogleSessionOut(
         **tokens.model_dump(),
-        user=UserOut.model_validate(user),
+        user=payload,
         is_new_user=created,
     )
 
