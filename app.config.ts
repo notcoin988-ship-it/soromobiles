@@ -85,7 +85,23 @@ const config: ExpoConfig = {
   version: '1.0.0',
   orientation: 'portrait',
   icon: './assets/icon.png',
-  scheme: 'soro', // deep links soro:// (§5.1, §11)
+  /**
+   * Схемы, которые приложение принимает.
+   *
+   * soro:// — собственные ссылки (§5.1, §11).
+   *
+   * com.googleusercontent.apps.<android-клиент> — обратная схема OAuth-клиента.
+   * Без неё браузерный вход доходит до выбора аккаунта и ЗАСТРЕВАЕТ: Google
+   * возвращает управление именно на неё, а система не знает, какому
+   * приложению отдать ответ. Проверено на живом телефоне — ровно так и было.
+   *
+   * Клиент здесь Android-овский: на iOS свою схему добавляет плагин
+   * @react-native-google-signin через iosUrlScheme.
+   */
+  scheme: [
+    'soro',
+    'com.googleusercontent.apps.500782884295-nrvihf8vob0i4vqk6rarm3vodooa07b3',
+  ],
   userInterfaceStyle: 'automatic',
   backgroundColor: '#0B090A', // bg0 тёмной темы — она по умолчанию (§7)
   // New Architecture в SDK 57 включена по умолчанию — отдельного флага

@@ -5,18 +5,13 @@ import pathlib
 import sys
 
 FILES = [
-    "security.py",
-    "models_refresh_token.py",
-    "router_auth.py",
+    # Уезжает на сервер:
     "router_auth_google.py",
-    "deps.py",
     "router_account.py",
-    "router_config.py",
-    "models_message_idempotency.py",
-    "router_ask_idempotent.py",
-    "router_ask_stream.py",
-    "router_chats_pagination.py",
-    "pure.py",
+    # Уже стоит на проде, лежит здесь как образец и опора для стенда:
+    "security.py",
+    "deps.py",
+    "router_auth.py",
 ]
 
 here = pathlib.Path(__file__).parent

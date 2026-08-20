@@ -85,6 +85,27 @@ async def prepare_database() -> None:
     print(f"[{datetime.now():%H:%M:%S}] база готова, ручки подняты")
 
 
+# --- В Swagger — только то, что деплоим ---------------------------------------
+#
+# Сервер поднимает и служебные ручки: без /auth/me, /v1/auth/refresh и заглушек
+# конфига и списка чатов приложение не доходит до экрана чата. Но в
+# документации им делать нечего: проверяем и обсуждаем мы ровно две ручки,
+# остальное — подпорки стенда, и в списке они только сбивают.
+#
+# Ручки при этом продолжают работать: include_in_schema убирает их из схемы,
+# а не из маршрутизации.
+DEPLOYED = {("POST", "/v1/auth/google"), ("DELETE", "/v1/account")}
+
+for route in app.routes:
+    methods = getattr(route, "methods", None)
+    if not methods:
+        continue
+    route.include_in_schema = any((m, route.path) in DEPLOYED for m in methods)
+
+# Схема кешируется при первом обращении — сбрасываем, иначе правка не видна.
+app.openapi_schema = None
+
+
 if __name__ == "__main__":
     # 0.0.0.0, а не localhost: иначе ни эмулятор, ни телефон в сети не достучатся.
     uvicorn.run(app, host="0.0.0.0", port=8787, log_level="info")
