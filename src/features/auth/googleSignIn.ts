@@ -1,72 +1,74 @@
+import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import {
   GoogleSignin,
   isErrorWithCode,
   statusCodes,
 } from '@react-native-google-signin/google-signin';
+import * as Crypto from 'expo-crypto';
 import * as WebBrowser from 'expo-web-browser';
 
-import { GOOGLE_REDIRECT_URL, googleAuthUrl, parseGoogleRedirect } from './googleAuthLink';
+import {
+  base64url,
+  googleAuthUrl,
+  parseGoogleRedirect,
+  redirectUriFor,
+  tokenRequestBody,
+  TOKEN_ENDPOINT,
+  type Pkce,
+} from './googleAuthLink';
 import { themes, type ThemeName } from '../../design/tokens';
 
 /**
  * Вход через Google: сначала нативное окно, при невозможности — браузер.
  *
- * ПОЧЕМУ ДВА ПУТИ, А НЕ ОДИН.
+ * ОБА ПУТИ ЗАКАНЧИВАЮТСЯ ОДИНАКОВО — id_token, подписанным Google. Поэтому
+ * серверу нужна ровно одна ручка (POST /v1/auth/google): ни таблиц, ни правок
+ * в существующем коде сайта, ни отдельного обмена одноразовыми кодами.
  *
- * Нативный (Credential Manager / Google Sign-In) показывает системный лист
- * выбора аккаунта поверх приложения — то самое «маленькое окно», к которому
- * человек привык в современных приложениях. Он же самый быстрый: аккаунт уже есть
- * на телефоне, пароль вводить не нужно. Но он работает ТОЛЬКО когда сходятся
- * три вещи: на устройстве есть сервисы Google, в Google Cloud Console заведён
- * OAuth-клиент типа Android с отпечатком SHA-1 нашей подписи, и приложение
- * подписано именно тем ключом. Иначе Google отвечает DEVELOPER_ERROR.
+ * НАТИВНЫЙ ПУТЬ (Google Sign-In) показывает системное окно выбора аккаунта
+ * поверх приложения: аккаунт уже на телефоне, пароль вводить не нужно.
+ * Работает, только когда сходятся три вещи — есть сервисы Google, в консоли
+ * заведён OAuth-клиент типа Android с отпечатком SHA-1 нашей подписи, и
+ * приложение подписано именно тем ключом. Иначе DEVELOPER_ERROR.
  *
- * Браузерный — то же, что на sorollm.tj: OAuth нашего сервера в Chrome Custom
- * Tabs (на iOS — ASWebAuthenticationSession, он показывается модально). Он не
- * требует НИЧЕГО в консоли, потому что идёт на web-клиенте сайта, и работает
- * даже там, где сервисов Google нет вовсе.
+ * БРАУЗЕРНЫЙ ПУТЬ существует ради телефонов БЕЗ сервисов Google — Huawei и
+ * прочих без GMS, а их в Таджикистане заметная доля. Для них нативного окна
+ * не существует в принципе, и без этого пути они не вошли бы никогда.
  *
- * Второй путь оставлен не «на всякий случай», а по делу: в Таджикистане
- * заметная доля телефонов Huawei без GMS, и для их владельцев нативное окно
- * не появится никогда. Плюс он же прикрывает время, пока запись в консоли не
- * заведена: приложение продолжает пускать людей, а не встречает их ошибкой.
- *
- * Наружу отдаётся РАЗНОЕ, и это не деталь реализации: нативный путь приносит
- * id_token, подписанный Google, браузерный — одноразовый код нашего сервера.
- * Обмениваются они на сессию разными эндпоинтами, поэтому тип различает их
- * явно, а не прячет за общей строкой.
+ * Весь его обмен происходит ВНУТРИ приложения: оно само говорит с Google по
+ * PKCE и само меняет код на id_token. Наш сервер в этом не участвует — потому
+ * серверных доработок под браузерный путь и нет.
  */
-
-export type GoogleCredential =
-  /** id_token от самого Google — сервер проверяет его подписью Google. */
-  | { kind: 'idToken'; idToken: string }
-  /** Одноразовый код нашего сервера из редиректа soro://auth/callback. */
-  | { kind: 'code'; code: string };
 
 export type GoogleSignInResult =
-  | { ok: true; credential: GoogleCredential }
-  /** Окно закрыли сами. Это не ошибка — показывать нечего. */
+  | { ok: true; idToken: string }
+  /** Окно закрыли сами. Не ошибка — показывать нечего. */
   | { ok: false; reason: 'cancelled' }
+  /** Ни сервисов Google, ни браузера — войти нечем. */
+  | { ok: false; reason: 'unavailable' }
   | { ok: false; reason: 'failed' };
 
-/**
- * Идентификатор web-клиента сайта. Не секрет (он виден в любом OAuth-запросе
- * с sorollm.tj), но и не константа в коде экрана: лежит в app.config.ts (§6.1).
- *
- * Именно web-, а не android-клиент: Google кладёт его в поле aud выданного
- * id_token, и по нему сервер понимает, что токен выпущен для нас. Android-
- * клиент при этом тоже нужен — но не здесь, а в консоли: он опознаёт
- * приложение по подписи.
- */
-const WEB_CLIENT_ID = (Constants.expoConfig?.extra?.googleWebClientId as string | undefined) ?? '';
+const extra = Constants.expoConfig?.extra ?? {};
 
 /**
- * Клиент типа iOS. На Android не нужен вовсе — там приложение опознаётся по
- * подписи APK, — а на iPhone без него GIDSignIn не знает, чьё это приложение,
- * и отказывает ещё до показа окна.
+ * Web-клиент. Нативному пути нужен как serverClientId: Google кладёт его в
+ * aud выданного id_token, и по нему сервер узнаёт, что токен выпущен для нас.
  */
-const IOS_CLIENT_ID = (Constants.expoConfig?.extra?.googleIosClientId as string | undefined) ?? '';
+const WEB_CLIENT_ID = (extra.googleWebClientId as string | undefined) ?? '';
+
+/** Клиент типа iOS: по нему опознают приложение и GIDSignIn, и браузер. */
+const IOS_CLIENT_ID = (extra.googleIosClientId as string | undefined) ?? '';
+
+/**
+ * Клиент типа Android. Нативному пути не передаётся — там опознание идёт по
+ * подписи APK, — но браузерному нужен: в адресе возврата стоит собственная
+ * схема именно этого клиента.
+ */
+const ANDROID_CLIENT_ID = (extra.googleAndroidClientId as string | undefined) ?? '';
+
+/** От чьего имени идёт браузерный обмен — зависит от платформы. */
+const BROWSER_CLIENT_ID = Platform.OS === 'ios' ? IOS_CLIENT_ID : ANDROID_CLIENT_ID;
 
 let configured = false;
 
@@ -87,18 +89,22 @@ function configureOnce(): boolean {
 }
 
 /**
- * Нативное окно. Возвращает null, когда путь недоступен в принципе, —
- * тогда вызывающий уходит в браузер. Отмену от недоступности отличаем: отмену
+ * Нативное окно. Возвращает null, когда путь недоступен в принципе, — тогда
+ * вызывающий уходит в браузер. Отмену от недоступности отличаем: отмену
  * повторять браузером нельзя, иначе закрытое окно немедленно откроется снова.
  */
 async function nativeSignIn(): Promise<GoogleSignInResult | null> {
   if (!configureOnce()) return null;
 
   try {
-    // showPlayServicesUpdateDialog: false — предлагать обновить сервисы Google
-    // посреди входа бессмысленно, для таких устройств есть браузерный путь.
+    // showPlayServicesUpdateDialog: false — системное окно «обновите сервисы»
+    // посреди входа обрывает сценарий; для таких телефонов есть браузер.
     await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: false });
+  } catch {
+    return null;
+  }
 
+  try {
     /**
      * Выход перед входом. Без него система молча берёт аккаунт, которым
      * входили в прошлый раз, и человек, нажавший «войти» ради смены аккаунта,
@@ -107,13 +113,12 @@ async function nativeSignIn(): Promise<GoogleSignInResult | null> {
     await GoogleSignin.signOut().catch(() => {});
 
     const response = await GoogleSignin.signIn();
-
     if (response.type === 'cancelled') return { ok: false, reason: 'cancelled' };
 
     const idToken = response.data.idToken;
-    // Токена может не быть, если webClientId не совпал с тем, что в консоли.
-    // Это ошибка настройки, а не устройства: пробуем браузер.
-    return idToken ? { ok: true, credential: { kind: 'idToken', idToken } } : null;
+    // Токена нет, если webClientId разошёлся с заведённым в консоли. Это
+    // ошибка настройки, а не устройства, — браузер её обойдёт.
+    return idToken ? { ok: true, idToken } : null;
   } catch (error) {
     if (isErrorWithCode(error)) {
       // Отмену системным жестом «назад» модуль отдаёт кодом, а не ответом.
@@ -121,52 +126,114 @@ async function nativeSignIn(): Promise<GoogleSignInResult | null> {
       // Второе нажатие, пока окно уже открыто, — просто ждём первое.
       if (error.code === statusCodes.IN_PROGRESS) return { ok: false, reason: 'cancelled' };
     }
-    /**
-     * Всё остальное — недоступность нативного пути: нет сервисов Google
-     * (Huawei и прочие без GMS), не заведён Android-клиент в консоли
-     * (DEVELOPER_ERROR), приложение подписано другим ключом. Каждый из этих
-     * случаев чинится браузером, поэтому здесь не ошибка, а null.
-     */
+    // DEVELOPER_ERROR, чужая подпись, сбой внутри GMS — всё чинится браузером.
     return null;
   }
 }
 
-/** Браузерный путь — тот же, что на сайте. */
-async function browserSignIn(
-  baseUrl: string,
-  themeName: ThemeName,
-): Promise<GoogleSignInResult> {
+/**
+ * Пара PKCE. Живёт здесь, а не в googleAuthLink: нужен expo-crypto, а тот
+ * файл намеренно без зависимостей, чтобы прогоняться быстрым набором тестов.
+ */
+async function createPkce(): Promise<Pkce> {
+  // 32 байта энтропии — verifier выходит 43 символа, минимум по RFC.
+  const bytes = await Crypto.getRandomBytesAsync(32);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  const verifier = base64url(globalThis.btoa(binary));
+
+  const digest = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, verifier, {
+    encoding: Crypto.CryptoEncoding.BASE64,
+  });
+
+  return { verifier, challenge: base64url(digest) };
+}
+
+/** Случайный state: 16 байт в hex. Сверяется при возврате из браузера. */
+async function randomState(): Promise<string> {
+  const bytes = await Crypto.getRandomBytesAsync(16);
+  return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Браузерный путь: PKCE напрямую с Google.
+ *
+ * openAuthSessionAsync, а не openBrowserAsync: он сам ловит редирект на нашу
+ * схему, закрывает окно и отдаёт адрес обратно. С обычным браузером окно
+ * осталось бы висеть поверх экрана после успешного входа.
+ */
+async function browserSignIn(themeName: ThemeName): Promise<GoogleSignInResult> {
+  if (!BROWSER_CLIENT_ID) return { ok: false, reason: 'unavailable' };
+
   const theme = themes[themeName];
+  const pkce = await createPkce();
+  const state = await randomState();
 
   let result: WebBrowser.WebBrowserAuthSessionResult;
   try {
-    result = await WebBrowser.openAuthSessionAsync(googleAuthUrl(baseUrl), GOOGLE_REDIRECT_URL, {
-      // Панель браузера в цветах приложения — иначе поверх тёмной темы
-      // распахивается белая полоса (как в openDocument).
-      toolbarColor: theme.bg1,
-      controlsColor: theme.text,
-      // Куки браузера НЕ изолируются: именно в них лежит вход в Google,
-      // ради которого человек и нажимает эту кнопку.
-      preferEphemeralSession: false,
-    });
+    result = await WebBrowser.openAuthSessionAsync(
+      googleAuthUrl({ clientId: BROWSER_CLIENT_ID, challenge: pkce.challenge, state }),
+      redirectUriFor(BROWSER_CLIENT_ID),
+      {
+        // Панель браузера в цветах приложения — иначе поверх тёмной темы
+        // распахивается белая полоса.
+        toolbarColor: theme.bg1,
+        controlsColor: theme.text,
+        // Куки браузера НЕ изолируются: там уже может быть вход в Google.
+        preferEphemeralSession: false,
+      },
+    );
   } catch {
-    // Встроенного браузера на устройстве может не быть (урезанные прошивки).
-    return { ok: false, reason: 'failed' };
+    // Встроенного браузера может не быть вовсе (урезанные прошивки).
+    return { ok: false, reason: 'unavailable' };
   }
 
   // dismiss — закрыли крестиком, cancel — системной кнопкой «назад».
   if (result.type !== 'success') return { ok: false, reason: 'cancelled' };
 
-  const redirect = parseGoogleRedirect(result.url);
-  return redirect.ok
-    ? { ok: true, credential: { kind: 'code', code: redirect.code } }
-    : { ok: false, reason: 'failed' };
+  const redirect = parseGoogleRedirect(result.url, state);
+  if (!redirect.ok) {
+    // Отказ на экране Google — то же, что закрыть окно: человек передумал.
+    return { ok: false, reason: redirect.reason === 'denied' ? 'cancelled' : 'failed' };
+  }
+
+  /**
+   * Обмен кода на токены — прямо с Google, минуя наш сервер. Секрет не нужен:
+   * у установленного приложения его нет, вместо него PKCE-verifier.
+   *
+   * Голый fetch, а не наш ApiClient: тот добавляет Authorization, ретраи и
+   * заголовки нашего API, которым на чужой ручке делать нечего.
+   */
+  try {
+    const response = await fetch(TOKEN_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: tokenRequestBody({
+        clientId: BROWSER_CLIENT_ID,
+        code: redirect.code,
+        verifier: pkce.verifier,
+      }),
+    });
+
+    if (!response.ok) return { ok: false, reason: 'failed' };
+
+    const payload: unknown = await response.json();
+    const idToken =
+      typeof payload === 'object' && payload !== null
+        ? (payload as { id_token?: unknown }).id_token
+        : undefined;
+
+    return typeof idToken === 'string' && idToken
+      ? { ok: true, idToken }
+      : { ok: false, reason: 'failed' };
+  } catch {
+    // Сеть отвалилась между согласием и обменом. Код уже потрачен, повторять
+    // нечего — человеку придётся начать вход заново.
+    return { ok: false, reason: 'failed' };
+  }
 }
 
-export async function startGoogleSignIn(
-  baseUrl: string,
-  themeName: ThemeName,
-): Promise<GoogleSignInResult> {
+export async function startGoogleSignIn(themeName: ThemeName): Promise<GoogleSignInResult> {
   const native = await nativeSignIn();
-  return native ?? browserSignIn(baseUrl, themeName);
+  return native ?? browserSignIn(themeName);
 }

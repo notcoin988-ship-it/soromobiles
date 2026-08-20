@@ -54,8 +54,8 @@ async function call(path, { method = 'GET', body, auth = false, raw = false, red
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
-      // redirect: 'manual' нужен проверке /auth/google: интересен сам редирект
-      // на accounts.google.com, а не страница, которая по нему откроется.
+      // redirect остаётся параметром: пригодится, если снова понадобится
+      // смотреть на сам редирект, а не на страницу за ним.
       redirect,
     });
     if (raw) return { status: response.status, response };
@@ -94,32 +94,9 @@ async function checkAuth() {
   console.log('\nB1 + B2 — вход через Google и выдача токенов');
 
   /**
-   * Пройти вход целиком скрипт не может: на середине стоит живой Google с
-   * выбором аккаунта. Проверяется всё, что можно проверить без человека, —
-   * то есть обе НАШИ половины обмена.
-   */
-  const start = await call('/auth/google?platform=mobile', { redirect: 'manual', raw: true });
-
-  if (start.status === 404) {
-    record('B2', 'GET /auth/google', false, 'эндпоинта не существует (404)');
-  } else {
-    const location = start.response?.headers.get('location') ?? '';
-    record(
-      'B2',
-      'GET /auth/google?platform=mobile ведёт на Google',
-      [302, 303, 307].includes(start.status) && location.includes('accounts.google.com'),
-      [302, 303, 307].includes(start.status)
-        ? location
-          ? `редирект на ${new URL(location).host}`
-          : 'редирект без Location'
-        : `статус ${start.status}, ожидался 302`,
-    );
-  }
-
-  /**
-   * Нативный путь: id_token из системного окна выбора аккаунта. Настоящего
-   * токена у скрипта нет, поэтому проверяется поведение на заведомо негодном:
-   * сервер обязан ОТВЕРГНУТЬ его, а не упасть и не завести сессию.
+   * Единственная ручка входа. Настоящего id_token у скрипта нет — его выдаёт
+   * Google живому человеку, — поэтому проверяется поведение на заведомо
+   * негодном: сервер обязан ОТВЕРГНУТЬ его, а не упасть и не завести сессию.
    */
   const idToken = await call('/v1/auth/google', {
     method: 'POST',
@@ -127,7 +104,8 @@ async function checkAuth() {
   });
 
   if (idToken.status === 404) {
-    record('B2', 'POST /v1/auth/google (нативный вход)', false, 'эндпоинта не существует (404)');
+    record('B2', 'POST /v1/auth/google', false, 'эндпоинта не существует (404)');
+    record('B1', 'выдача access + refresh токенов', false, 'недостижимо: нет ручки входа');
   } else {
     record(
       'B2',
@@ -140,34 +118,6 @@ async function checkAuth() {
       'негодный id_token не выдаёт токенов',
       !idToken.json?.access_token,
       idToken.json?.access_token ? 'сервер вернул токен на выдуманный id_token' : '',
-    );
-  }
-
-  /**
-   * Браузерный путь: обмен одноразового кода на пару JWT. Настоящего кода у
-   * скрипта нет, поэтому проверяется поведение на заведомо негодном — сервер
-   * обязан его ОТВЕРГНУТЬ, а не упасть пятисоткой и не завести сессию.
-   */
-  const exchange = await call('/v1/auth/google/exchange', {
-    method: 'POST',
-    body: { code: 'contract-test-not-a-real-code' },
-  });
-
-  if (exchange.status === 404) {
-    record('B2', 'POST /v1/auth/google/exchange', false, 'эндпоинта не существует (404)');
-    record('B1', 'выдача access + refresh токенов', false, 'недостижимо: нет обмена');
-  } else {
-    record(
-      'B2',
-      'POST /v1/auth/google/exchange отвергает негодный код',
-      [400, 401, 422].includes(exchange.status),
-      `статус ${exchange.status}` + (exchange.status >= 500 ? ' — падение вместо отказа' : ''),
-    );
-    record(
-      'B2',
-      'негодный код не выдаёт токенов',
-      !exchange.json?.access_token,
-      exchange.json?.access_token ? 'сервер вернул токен на выдуманный код' : '',
     );
   }
 

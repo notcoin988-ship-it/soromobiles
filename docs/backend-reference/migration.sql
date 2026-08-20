@@ -1,4 +1,8 @@
--- Миграция БД под мобильный контракт: токены (B1) и вход через Google (B2).
+-- Миграция БД под мобильный контракт: таблица refresh-токенов (B1).
+--
+-- ⚠ НА ПРОДЕ ЭТО УЖЕ ПРИМЕНЕНО: /v1/auth/login, /refresh и /logout там
+-- работают, значит таблица есть. Файл остаётся для чистого стенда и для
+-- истории. Вход через Google (POST /v1/auth/google) своих таблиц НЕ требует.
 --
 -- ДВА способа накатить:
 --
@@ -40,29 +44,6 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 -- Самый частый запрос — живые токены пользователя.
 CREATE INDEX IF NOT EXISTS ix_refresh_tokens_user_active
     ON refresh_tokens (user_id, revoked_at);
-
--- --- mobile_auth_codes (B2, вход через Google) ------------------------------
--- Одноразовый код из редиректа soro://auth/callback?code=… Живёт 5 минут и
--- гасится первым применением: токены нельзя отдавать прямо в адресе редиректа,
--- он проходит через историю браузера и чужие приложения с той же схемой.
-CREATE TABLE IF NOT EXISTS mobile_auth_codes (
-    id           UUID PRIMARY KEY,
-    user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    -- Хеш кода, а не сам код — как у refresh-токенов.
-    code_hash    VARCHAR(64) NOT NULL UNIQUE,
-    -- Завёл ли этот вход нового пользователя: нужно счётчику signup_completed
-    -- (§13), на клиенте регистрация через Google неотличима от возврата.
-    is_new_user  BOOLEAN NOT NULL DEFAULT FALSE,
-    expires_at   TIMESTAMPTZ NOT NULL,
-    -- NULL — код не потрачен. Потраченный не удаляется сразу: повторное
-    -- применение видно и означает перехват.
-    used_at      TIMESTAMPTZ,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Единственный запрос не по code_hash — уборка просроченных.
-CREATE INDEX IF NOT EXISTS ix_mobile_auth_codes_expires
-    ON mobile_auth_codes (expires_at);
 
 COMMIT;
 

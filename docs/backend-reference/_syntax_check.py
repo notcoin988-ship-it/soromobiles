@@ -7,7 +7,6 @@ import sys
 FILES = [
     "security.py",
     "models_refresh_token.py",
-    "models_mobile_auth_code.py",
     "router_auth.py",
     "router_auth_google.py",
     "deps.py",

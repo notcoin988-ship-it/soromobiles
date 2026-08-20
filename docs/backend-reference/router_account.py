@@ -35,7 +35,6 @@ from ..models import (
     Chat,
     Feedback,
     Message,
-    MobileAuthCode,
     RefreshToken,
     TokenUsage,
     User,
@@ -110,10 +109,6 @@ async def purge_user_data(session: AsyncSession, user_id: uuid.UUID) -> None:
 
     # Все refresh-токены: после удаления по ним не должно выдаваться access.
     await session.execute(delete(RefreshToken).where(RefreshToken.user_id == user_id))
-
-    # Невыкупленные одноразовые коды входа: они живут минуты, но по коду,
-    # выданному за секунду до удаления, иначе ещё можно получить сессию.
-    await session.execute(delete(MobileAuthCode).where(MobileAuthCode.user_id == user_id))
 
     # ЗАМЕНИТЬ: если в проекте есть проекты (/v1/project/*) и вложения —
     # добавить их сюда. §6.6 требует удалять и их тоже.

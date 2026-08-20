@@ -365,6 +365,19 @@ const config: ExpoConfig = {
      */
     googleIosClientId:
       '500782884295-e1hntpkh21r8htmj6pes27p7mjm4igjh.apps.googleusercontent.com',
+
+    /**
+     * Клиент типа Android. Нативному входу он не передаётся — там Google
+     * опознаёт приложение по подписи APK, — но нужен браузерному: в адресе
+     * возврата стоит его собственная схема (идентификатор задом наперёд).
+     *
+     * ВАЖНО: у Android-клиентов приём собственной схемы по умолчанию выключен.
+     * Пока в консоли не включена галочка «Custom URI scheme», браузерный путь
+     * на Android отвечает «Custom URI scheme is not enabled for your Android
+     * client», и телефоны без сервисов Google войти не смогут.
+     */
+    googleAndroidClientId:
+      '500782884295-nrvihf8vob0i4vqk6rarm3vodooa07b3.apps.googleusercontent.com',
   },
 };
 

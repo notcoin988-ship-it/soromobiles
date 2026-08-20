@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-import { api, API_BASE_URL, setUnauthorizedHandler } from '../../api';
+import { api, setUnauthorizedHandler } from '../../api';
 import { messageKeyFor } from '../../api/errors';
 import * as authApi from '../../api/endpoints/auth';
 import type { AuthSession, User } from '../../api/types';
@@ -104,24 +104,28 @@ export const useAuthStore = create<AuthState & AuthActions>()((set) => {
        */
       track({ name: 'signup_started' });
 
-      const auth = await startGoogleSignIn(API_BASE_URL, themeName);
+      const auth = await startGoogleSignIn(themeName);
 
       if (!auth.ok) {
-        // Закрыл окно сам — это не ошибка, плашку показывать не за что.
-        set({ ...CLEAN, formError: auth.reason === 'cancelled' ? null : 'authErrors.googleFailed' });
+        /**
+         * Три исхода, и путать их нельзя. Закрыл окно сам — не ошибка, плашки
+         * нет. Нет ни сервисов Google, ни браузера — причина не в человеке и
+         * не в связи, общее «попробуйте ещё раз» тут только злит. Остальное —
+         * общая ошибка входа.
+         */
+        const messageFor = {
+          cancelled: null,
+          unavailable: 'authErrors.googleUnavailable',
+          failed: 'authErrors.googleFailed',
+        } as const;
+
+        set({ ...CLEAN, formError: messageFor[auth.reason] });
         return;
       }
 
-      /**
-       * Нативное окно приносит id_token самого Google, браузер — одноразовый
-       * код нашего сервера. Проверяются они разными ручками, поэтому выбор
-       * здесь, а не внутри googleSignIn: слой api не должен знать, каким
-       * окном человек вошёл.
-       */
-      const result =
-        auth.credential.kind === 'idToken'
-          ? await authApi.signInWithGoogleIdToken(api, auth.credential.idToken)
-          : await authApi.exchangeGoogleCode(api, auth.credential.code);
+      // Оба пути — системное окно и браузер — приносят id_token от Google,
+      // поэтому ручка одна.
+      const result = await authApi.signInWithGoogleIdToken(api, auth.idToken);
 
       if (result.ok) {
         // Новый аккаунт заводится молча, без отдельного экрана регистрации:
