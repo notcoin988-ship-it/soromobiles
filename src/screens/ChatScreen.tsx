@@ -173,6 +173,24 @@ export default function ChatScreen() {
     </Text>
   );
 
+  /**
+   * Сообщение об ошибке — ОДНО на оба состояния экрана.
+   *
+   * Раньше этот текст стоял только в ветке активной переписки, и первая же
+   * неудачная отправка выглядела так: поле очистилось, и ничего. Ровно этот
+   * случай и ломается чаще всего — на первом вопросе чата ещё нет, значит
+   * падает createChat, сообщение в ленту не попадает, а ветка с ошибкой не
+   * рисуется вовсе. Проверено на живом телефоне.
+   */
+  const errorNotice = errorKey ? (
+    <Text
+      style={[scaleText(typography.caption, scale), styles.error, { color: theme.text3 }]}
+      maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
+    >
+      {t(errorKey)}
+    </Text>
+  ) : null;
+
   return (
     <KeyboardAvoidingView
       style={[styles.root, { backgroundColor: theme.bg0, paddingTop: insets.top }]}
@@ -233,6 +251,7 @@ export default function ChatScreen() {
           </Text>
 
           {composer}
+          {errorNotice}
           {disclaimer}
 
           {/*
@@ -318,14 +337,7 @@ export default function ChatScreen() {
             </Pressable>
           ) : null}
 
-          {errorKey ? (
-            <Text
-              style={[scaleText(typography.caption, scale), styles.error, { color: theme.text3 }]}
-              maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
-            >
-              {t(errorKey)}
-            </Text>
-          ) : null}
+          {errorNotice}
 
           {/*
             В активном чате внизу только поле ввода.
@@ -401,7 +413,6 @@ function TopBar() {
   const scale = useFontScale();
   const navigation = useNavigation<DrawerNavigationProp<ChatDrawerParams>>();
   const chatId = useChatStore((s) => s.chatId);
-  const reset = useChatStore((s) => s.reset);
   const { data: chats = [] } = useChats('');
   const { t } = useTranslation();
 
@@ -426,7 +437,12 @@ function TopBar() {
         {title}
       </Text>
 
-      <TopButton icon="edit" onPress={reset} accessibilityLabel={t('common.newChat')} />
+      {/*
+        ОТСТУПЛЕНИЕ ОТ §7.4, по решению пользователя (24.08.2026): в шапке
+        оставлен только переключатель темы. Кнопка нового чата отсюда убрана —
+        она есть в боковом меню, крупная и подписанная, а в шапке дублировалась
+        безымянной иконкой рядом с темой.
+      */}
       <ThemeToggle />
     </View>
   );

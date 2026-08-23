@@ -1,6 +1,15 @@
 import { ApiClient } from './client';
+import {
+  INITIAL_STATE,
+  initialActive,
+  mirrorOf,
+  nextState,
+  type ActiveHost,
+  type FailoverState,
+} from './hostFailover';
 import { isConnected } from './network';
 import { secureTokenStore } from '../features/auth/tokenStore';
+import { settingsStorage } from '../store/kv';
 
 /**
  * Единственный экземпляр API-клиента на приложение.
@@ -14,16 +23,59 @@ const DEFAULT_BASE_URL = 'http://localhost:8787';
 export const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? DEFAULT_BASE_URL;
 
 /**
- * Адрес задаётся ТОЛЬКО окружением и в рантайме не меняется.
+ * Запасной адрес — второе имя того же сервера (см. hostFailover.ts).
  *
- * Здесь была функция overrideBaseUrl для дев-входа гостем: она уводила весь
- * клиент на прод. Стоила дорого — после одного нажатия кнопки приложение
- * молча перестало ходить на мок, а регистрация возвращала «Ҷавоб гирифта
- * нашуд», потому что запрос уходил на сервер, где такой ручки нет. Диагностика
- * заняла больше, чем сама возможность когда-либо экономила.
+ * Руками адрес по-прежнему НЕ переключается: здесь была функция
+ * overrideBaseUrl для дев-входа гостем, она уводила весь клиент на прод и
+ * стоила дорого — после одного нажатия приложение молча переставало ходить на
+ * мок. Переключение осталось только автоматическим и только по недоступности.
  */
+export const API_MIRROR_URL = mirrorOf(API_BASE_URL);
+
+/** Ключ в MMKV: какой адрес работал в прошлый раз и когда это выяснилось. */
+const HOST_KEY = 'api.host.v1';
+
+function readSaved(): { active: ActiveHost; at: number } | null {
+  const raw = settingsStorage.getString(HOST_KEY);
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const { active, at } = parsed as { active?: unknown; at?: unknown };
+    if ((active !== 'primary' && active !== 'mirror') || typeof at !== 'number') return null;
+    return { active, at };
+  } catch {
+    // Обрывок записи не должен ронять запуск — просто начинаем с основного.
+    return null;
+  }
+}
+
+let failover: FailoverState = API_MIRROR_URL
+  ? { ...INITIAL_STATE, active: initialActive(readSaved(), Date.now()) }
+  : INITIAL_STATE;
+
 function resolveBaseUrl(): string {
-  return API_BASE_URL;
+  return failover.active === 'mirror' && API_MIRROR_URL ? API_MIRROR_URL : API_BASE_URL;
+}
+
+/** Какой адрес используется сейчас — нужно экрану поддержки (§13). */
+export function activeBaseUrl(): string {
+  return resolveBaseUrl();
+}
+
+function noteHost(event: 'reachable' | 'unreachable'): void {
+  // Зеркала нет (дев-сборка против localhost) — переключаться некуда.
+  if (!API_MIRROR_URL) return;
+
+  const updated = nextState(failover, event);
+  if (updated.active === failover.active && updated.failures === failover.failures) return;
+
+  const switched = updated.active !== failover.active;
+  failover = updated;
+
+  if (switched) {
+    settingsStorage.set(HOST_KEY, JSON.stringify({ active: failover.active, at: Date.now() }));
+  }
 }
 
 /**
@@ -43,6 +95,8 @@ export const api = new ApiClient({
   tokens: secureTokenStore,
   onLogout: () => onUnauthorized(),
   isConnected,
+  onHostReachable: () => noteHost('reachable'),
+  onHostUnreachable: () => noteHost('unreachable'),
   /**
    * Логи только в дев-сборке. В релизе их нет вовсе — §11 и §13 запрещают
    * писать в системный лог что-либо о запросах: там адреса, коды ошибок и
@@ -60,5 +114,6 @@ export const api = new ApiClient({
 });
 
 export * from './client';
+export * from './hostFailover';
 export * from './errors';
 export * from './types';

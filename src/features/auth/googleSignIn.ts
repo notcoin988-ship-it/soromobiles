@@ -169,6 +169,24 @@ async function browserSignIn(themeName: ThemeName): Promise<GoogleSignInResult> 
   const pkce = await createPkce();
   const state = await randomState();
 
+  /**
+   * Гасим прежнюю сессию перед новой.
+   *
+   * Без этого второй и последующие входы обрываются мгновенно: браузер не
+   * открывается вовсе, а openAuthSessionAsync тут же возвращает dismiss —
+   * поймано на живом телефоне, между попытками проходило 10 миллисекунд.
+   * Первый вход при этом проходит нормально, поэтому ошибка легко пролезла бы
+   * в релиз: она видна только со второго раза.
+   *
+   * dismissAuthSession синхронный и на iOS может бросить, если сессии нет, —
+   * оборачиваем и молчим: нам важно лишь, чтобы состояние не осталось висеть.
+   */
+  try {
+    WebBrowser.dismissAuthSession();
+  } catch {
+    // Сессии не было — это нормальный случай, а не ошибка.
+  }
+
   let result: WebBrowser.WebBrowserAuthSessionResult;
   try {
     result = await WebBrowser.openAuthSessionAsync(

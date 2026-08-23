@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Dimensions, StyleSheet, View } from 'react-native';
+import { Dimensions, Linking, StyleSheet, View } from 'react-native';
 import { NavigationContainer, type LinkingOptions, type Theme as NavTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createDrawerNavigator } from '@react-navigation/drawer';
@@ -10,7 +10,6 @@ import { useChatStore } from '../features/chat/chatStore';
 import ChatListDrawer from '../features/history/ChatListDrawer';
 import { Logo } from '../design/Logo';
 import { needsConsent } from '../features/legal/consent';
-import { openDocument } from '../features/legal/openDocument';
 import { useLinks } from '../store/config';
 import ChatScreen from '../screens/ChatScreen';
 import DevGlyphsScreen from '../screens/DevGlyphsScreen';
@@ -86,7 +85,6 @@ function ChatWithDrawer() {
   const openChat = useChatStore((s) => s.openChat);
   const resetChat = useChatStore((s) => s.reset);
   const links = useLinks();
-  const themeName = useThemeName();
 
   return (
     <Drawer.Navigator
@@ -105,9 +103,17 @@ function ChatWithDrawer() {
             navigation.closeDrawer();
             navigation.getParent()?.navigate('Settings');
           }}
-          // Встроенный браузер, а не Chrome отдельным приложением (§8.1):
-          // человек возвращается в чат крестиком, а не через переключатель задач.
-          onHelp={() => void openDocument(links.support, themeName)}
+          /**
+           * Поддержка открывается СИСТЕМОЙ, а не встроенным браузером.
+           *
+           * §8.1 требует встроенный браузер для юридических документов — там
+           * человек читает страницу и возвращается крестиком. Здесь другое:
+           * ссылка ведёт в чат Telegram, и встроенный браузер показал бы
+           * веб-версию t.me с предложением «открыть в приложении» вместо
+           * самого чата. Linking отдаёт ссылку системе, и открывается
+           * Telegram, если он установлен.
+           */
+          onHelp={() => void Linking.openURL(links.support)}
         />
       )}
     >

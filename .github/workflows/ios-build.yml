@@ -44,6 +44,18 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 30
 
+    # Адрес сервера нужен ВСЕМУ заданию, а не одному шагу prebuild.
+    #
+    # Expo инлайнит EXPO_PUBLIC_* в JS-бандл в момент бандлинга, а на iOS бандл
+    # собирает не prebuild, а xcodebuild — фазой «Bundle React Native code and
+    # images» внутри шага «Build IPA». Пока переменная стояла только на шаге
+    # prebuild, до бандлинга она не доживала, и process.env.EXPO_PUBLIC_API_URL
+    # в src/api/index.ts откатывался на DEFAULT_BASE_URL = http://localhost:8787.
+    # IPA при этом выглядела здоровой, но ходила в никуда: в main.jsbundle
+    # сборки soro-ios-1787236982 лежал именно localhost.
+    env:
+      EXPO_PUBLIC_API_URL: https://api.sorollm.tj
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -169,8 +181,6 @@ jobs:
       # --no-install: поды ставит следующий шаг, с кешем.
       - name: Expo prebuild (генерация ios/)
         if: steps.detect.outputs.type == 'expo'
-        env:
-          EXPO_PUBLIC_API_URL: https://api.sorollm.tj
         run: npx expo prebuild --platform ios --no-install
 
       - name: Restore Pods cache

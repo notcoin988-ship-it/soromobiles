@@ -47,8 +47,31 @@ const PINS = [
   'sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w=',
 ];
 
+/**
+ * Дев-сборка определяется тем же правилом, что и в app.config.ts: прод-адрес
+ * всегда https, мок и локальный сервер — нет.
+ *
+ * Раньше послабление для localhost попадало и в релизный APK: комментарий в
+ * XML обещал «только для дев-сборки», но условия не было ни одного. На iOS
+ * симметричное послабление (NSAllowsLocalNetworking) под IS_DEV стояло —
+ * расходились платформы, а не замысел.
+ */
+const IS_DEV = !(process.env.EXPO_PUBLIC_API_URL ?? '').startsWith('https://');
+
 function buildNetworkSecurityConfig() {
   const pinEntries = PINS.map((pin) => `      <pin digest="SHA-256">${pin}</pin>`).join('\n');
+
+  // В релизе блока нет вовсе: ходить по открытому HTTP приложению незачем,
+  // и §11 этого не разрешает.
+  const localhostBlock = IS_DEV
+    ? `
+  <!-- Мок-сервер на localhost: только для дев-сборки. -->
+  <domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="true">localhost</domain>
+    <domain includeSubdomains="true">10.0.2.2</domain>
+  </domain-config>
+`
+    : '';
 
   return `<?xml version="1.0" encoding="utf-8"?>
 <!--
@@ -57,7 +80,7 @@ function buildNetworkSecurityConfig() {
   корня вместо листа — в комментарии плагина и docs/SECURITY.md.
 -->
 <network-security-config>
-  <!-- Открытый HTTP запрещён везде, кроме localhost для дев-сборки. -->
+  <!-- Открытый HTTP запрещён везде; localhost ниже добавляется только в дев-сборке. -->
   <base-config cleartextTrafficPermitted="false" />
 
   <domain-config cleartextTrafficPermitted="false">
@@ -67,13 +90,7 @@ function buildNetworkSecurityConfig() {
 ${pinEntries}
     </pin-set>
   </domain-config>
-
-  <!-- Мок-сервер на localhost: только для дев-сборки. -->
-  <domain-config cleartextTrafficPermitted="true">
-    <domain includeSubdomains="true">localhost</domain>
-    <domain includeSubdomains="true">10.0.2.2</domain>
-  </domain-config>
-</network-security-config>
+${localhostBlock}</network-security-config>
 `;
 }
 

@@ -1,6 +1,6 @@
 import type { EventPayload } from '../../telemetry/events';
-import type { ApiClient, ApiResult } from '../client';
-import { FALLBACK_CONFIG, type ClientConfig, type Usage } from '../types';
+import type { ApiClient } from '../client';
+import { FALLBACK_CONFIG, type ClientConfig } from '../types';
 
 /** Конфигурация клиента, лимиты, обратная связь, поддержка. */
 
@@ -52,15 +52,4 @@ export function compareVersions(a: string, b: string): number {
  */
 export async function sendEvent(client: ApiClient, payload: EventPayload): Promise<void> {
   await client.request('/v1/events', { method: 'POST', body: payload });
-}
-
-export function fetchUsage(client: ApiClient): Promise<ApiResult<Usage>> {
-  return client.request<Usage>('/v1/usage', { idempotent: true });
-}
-
-export function contactSupport(
-  client: ApiClient,
-  body: { question: string; contact: string; context: string },
-): Promise<ApiResult<unknown>> {
-  return client.request('/v1/support/ask', { method: 'POST', body });
 }

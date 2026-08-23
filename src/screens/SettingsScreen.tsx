@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 
@@ -148,20 +148,6 @@ export default function SettingsScreen({ onClose }: { onClose: () => void }) {
             // остаться не должна. Локальная база чистится вместе с сессией.
             void clearHistory().finally(() => void signOut());
           }}
-        />
-      </Section>
-
-      {/* --- Тозакунии таърих --- */}
-      <Section title={t('settings.clearHistory')}>
-        <Button
-          label={t('settings.clearHistory')}
-          variant="ghost"
-          onPress={() =>
-            Alert.alert(t('settings.confirmClearHistory'), undefined, [
-              { text: t('common.cancel'), style: 'cancel' },
-              { text: t('common.delete'), style: 'destructive', onPress: () => void clearHistory() },
-            ])
-          }
         />
       </Section>
 

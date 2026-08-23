@@ -49,3 +49,8 @@ builds/
 .expo-dev/
 android/
 ios/
+
+# Артефакты проверок и сборки, в репозитории им не место
+.expo-export*/
+__pycache__/
+*.pyc

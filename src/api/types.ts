@@ -164,17 +164,6 @@ export type RegenerateRequest = AskRequest & { message_id: string };
 // Лимиты, обратная связь
 // ---------------------------------------------------------------------------
 
-export type Usage = {
-  used: number;
-  limit: number;
-  remaining: number;
-  resets_at: string;
-  resets_at_local: string;
-  resets_in_hours: number;
-  approx_questions: number;
-  tier: Tier;
-};
-
 // Оценка 👍/👎 и жалоба на ответ убраны из приложения по решению заказчика:
 // под ответом остались только «копировать» и «перегенерировать» (см.
 // src/features/chat/MessageActions.tsx). Типы FeedbackRequest / ReportCategory

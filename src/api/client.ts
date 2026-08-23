@@ -53,6 +53,17 @@ export type ClientDeps = {
   sleep?: (ms: number) => Promise<void>;
   /** Никаких console.* в релизе (§5.3) — логгер инжектируется и по умолчанию молчит. */
   log?: (message: string, meta?: unknown) => void;
+  /**
+   * Сигналы для выбора адреса сервера (api/hostFailover.ts).
+   *
+   * Клиент сам адресами не управляет — он лишь сообщает, откликнулся хост или
+   * нет. Решение принимает сторона, которая собрала baseUrl-функцию.
+   *
+   * ВАЖНО: «нет интернета на устройстве» сюда НЕ попадает. Иначе режим полёта
+   * уводил бы приложение на зеркало, где так же нет связи.
+   */
+  onHostReachable?: () => void;
+  onHostUnreachable?: () => void;
 };
 
 export const TIMEOUT_FIRST_BYTE_MS = 20_000;
@@ -226,6 +237,9 @@ export class ApiClient {
         signal: controller.signal,
       });
 
+      // Ответ пришёл — адрес рабочий. Код ответа роли не играет: 500 тоже
+      // означает, что сервер на связи, и уходить на зеркало не нужно.
+      this.deps.onHostReachable?.();
       clearTimeout(timer);
       timer = setTimeout(() => controller.abort(), options.timeoutMs ?? TIMEOUT_TOTAL_MS);
 
@@ -261,6 +275,10 @@ export class ApiClient {
     } catch (error) {
       // Отмена извне (кнопка «Стоп») — не таймаут, пробрасываем как timeout
       // только если аборт наш.
+      // Свой таймаут и сетевой сбой при живом интернете — оба про то, что
+      // адрес не отвечает. Отмена пользователем («Стоп») — нет, поэтому она
+      // разбирается ниже отдельно и сигнала не даёт.
+      if (!options.signal?.aborted) this.deps.onHostUnreachable?.();
       if (timedOut) return { ok: false, error: { kind: 'timeout' } };
       if (options.signal?.aborted) return { ok: false, error: { kind: 'timeout' } };
       this.deps.log('network error', error);
