@@ -78,6 +78,8 @@
     "gen:icons": "node scripts/gen-icons.mjs",
     "verify": "npm run typecheck && npm run lint && npm test && npm run test:ui && npm run check:licenses",
     "build:android:dev": "expo export --platform android --output-dir .expo-dev --dev",
+    "check:release": "node scripts/check-release.mjs",
+    "verify:release": "npm run verify && npm run check:glyphs && npm run check:release && npm run check:secrets",
     "check:contract": "node scripts/check-contract.mjs",
     "check:mail": "node scripts/check-mail-dns.mjs sorollm.tj",
     "test:ui": "jest",
